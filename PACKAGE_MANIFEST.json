@@ -1,0 +1,40 @@
+{
+  "root_files": [
+    "PACKAGE_MANIFEST.json",
+    "README.md",
+    "xmm_comet_pipeline.sh",
+    "xmm_comet_run_qc.sh"
+  ],
+  "config": [
+    "config/xmm_comet_config.template.env"
+  ],
+  "docs": [
+    "docs/REFRACTOR_NOTES.md",
+    "docs/QC_GUIDE.md",
+    "docs/VALIDATION.md"
+  ],
+  "scripts": [
+    "scripts/add_instid_column.py",
+    "scripts/apply_spatial_trail_mask.py",
+    "scripts/build_contamination_products.py",
+    "scripts/build_qc_mosaics.py",
+    "scripts/combine_epic_images.py",
+    "scripts/combine_epic_lightcurves.py",
+    "scripts/curate_emllist_for_region.py",
+    "scripts/make_comet_track_and_segments.py",
+    "scripts/make_stillsky_mosaic.py",
+    "scripts/make_trail_mask.py",
+    "scripts/trail_mask_utils.py",
+    "scripts/xmm_comet_quick_checks.py",
+    "scripts/xmm_comet_spotcheck_frames.sh",
+    "scripts/xmm_event_geometry.py",
+    "scripts/xmm_qc_build_mosaics.sh",
+    "scripts/xmm_qc_manifest.py"
+  ],
+  "tests": [
+    "tests/test_refactor_helpers.py"
+  ],
+  "requirements": [
+    "requirements/python.txt"
+  ]
+}
