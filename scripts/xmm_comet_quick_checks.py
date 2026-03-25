@@ -755,6 +755,12 @@ def _read_espfilt_gti(espdir: Path) -> list[tuple[float, float]]:
 def check_clean(env: dict[str, str], outdir: Path) -> dict[str, Any]:
     workdir = Path(env["WORKDIR"])
     inst_map = {"PN": "EPN", "M1": "EMOS1", "M2": "EMOS2"}
+    skip_espfilt = env.get("CLEAN_SKIP_ESPFILT", "no").strip().lower() in (
+        "1",
+        "y",
+        "yes",
+        "true",
+    )
 
     # ---- Gather per-exposure metadata ----
     stats: list[dict[str, Any]] = []
@@ -790,6 +796,27 @@ def check_clean(env: dict[str, str], outdir: Path) -> dict[str, Any]:
             # Identify espfilt dir
             espdir = workdir / "clean" / inst / f"{stem}.clean.espfilt"
 
+            # Per-exposure espfilt GTI (if it exists)
+            per_exp_gti = workdir / "clean" / inst / f"{stem}.clean.flare_gti.fits"
+            per_exp_gti_time = 0.0
+            if per_exp_gti.exists():
+                try:
+                    with fits.open(per_exp_gti) as hdu:
+                        for ext in hdu:
+                            if ext.data is not None and hasattr(ext, "columns"):
+                                cols = ext.columns.names
+                                if "START" in cols and "STOP" in cols:
+                                    for s, e in zip(
+                                        ext.data["START"], ext.data["STOP"]
+                                    ):
+                                        dt = float(e) - float(s)
+                                        # Reject dummy GTIs (espfilt: 0→1e99)
+                                        if 0 < dt < 1e9:
+                                            per_exp_gti_time += dt
+                                    break
+                except Exception:
+                    per_exp_gti_time = 0.0
+
             # Classify time
             is_closed = raw_filter.lower() == "closed"
             if is_closed:
@@ -797,8 +824,23 @@ def check_clean(env: dict[str, str], outdir: Path) -> dict[str, Any]:
                 inst_closed_ontime += raw_ontime
             elif has_clean:
                 status = "cleaned"
-                inst_clean_ontime += clean_ontime
-                inst_flare_ontime += max(0, raw_ontime - clean_ontime)
+                # Events are PI/pattern-filtered only (not flare-filtered).
+                # Flare GTIs are applied downstream by image/detect/spectrum.
+                # Clean time = time covered by valid flare GTI intervals.
+                if per_exp_gti_time > 0:
+                    inst_clean_ontime += per_exp_gti_time
+                    inst_flare_ontime += max(0, raw_ontime - per_exp_gti_time)
+                elif per_exp_gti.exists():
+                    # GTI file exists but all rows sanitized (dummy GTI)
+                    inst_flare_ontime += raw_ontime
+                elif skip_espfilt:
+                    # espfilt not run: all time counts as clean
+                    inst_clean_ontime += clean_ontime
+                    inst_flare_ontime += max(0, raw_ontime - clean_ontime)
+                else:
+                    # espfilt ran but produced no valid GTI:
+                    # exposure excluded from flare-filtered products
+                    inst_flare_ontime += raw_ontime
                 rows.append(clean_rows)
             else:
                 status = "skipped"
@@ -809,6 +851,15 @@ def check_clean(env: dict[str, str], outdir: Path) -> dict[str, Any]:
             short = parts[3] if len(parts) > 3 else stem
             inst_raw_ontime += raw_ontime
 
+            # clean_ontime for display: time in valid flare-GTI intervals
+            if per_exp_gti_time > 0:
+                display_clean_ontime = per_exp_gti_time
+            elif per_exp_gti.exists() or not skip_espfilt:
+                # espfilt ran but no valid GTI → 0 clean time in products
+                display_clean_ontime = 0.0
+            else:
+                display_clean_ontime = clean_ontime
+
             all_exposures.append(
                 {
                     "inst": inst,
@@ -816,7 +867,7 @@ def check_clean(env: dict[str, str], outdir: Path) -> dict[str, Any]:
                     "status": status,
                     "filter": raw_filter,
                     "raw_ontime": raw_ontime,
-                    "clean_ontime": clean_ontime if has_clean else 0.0,
+                    "clean_ontime": display_clean_ontime if has_clean else 0.0,
                     "raw_rows": raw_rows,
                     "clean_rows": clean_rows if has_clean else 0,
                     "espdir": espdir,
@@ -909,12 +960,25 @@ def check_clean(env: dict[str, str], outdir: Path) -> dict[str, Any]:
     ]
     n_lc = min(len(s_exposures), 3)  # up to 3 rate-curve panels
     n_rows_fig2 = 2 + (1 if n_lc > 0 else 0)
-    fig2, axes2 = plt.subplots(n_rows_fig2, 2, figsize=(12, 4.2 * n_rows_fig2))
-    if n_rows_fig2 == 1:
-        axes2 = axes2[np.newaxis, :]
+    # Use gridspec: 2-column layout for rows 0-1, n_lc columns for rate curves
+    fig2 = plt.figure(figsize=(13, 4.5 * n_rows_fig2))
+    if n_lc > 0:
+        from matplotlib.gridspec import GridSpec
+
+        gs = GridSpec(n_rows_fig2, max(n_lc, 2), figure=fig2)
+        axes2_00 = fig2.add_subplot(gs[0, : max(n_lc, 2) // 2])
+        axes2_01 = fig2.add_subplot(gs[0, max(n_lc, 2) // 2 :])
+        axes2_10 = fig2.add_subplot(gs[1, :])
+        rate_axes = [fig2.add_subplot(gs[2, i]) for i in range(n_lc)]
+    else:
+        gs = GridSpec(n_rows_fig2, 2, figure=fig2)
+        axes2_00 = fig2.add_subplot(gs[0, 0])
+        axes2_01 = fig2.add_subplot(gs[0, 1])
+        axes2_10 = fig2.add_subplot(gs[1, :])
+        rate_axes = []
 
     # ---- Panel (0,0): per-instrument time budget stacked bar ----
-    ax = axes2[0, 0]
+    ax = axes2_00
     clean_t = np.array([s["clean_ontime"] for s in stats]) / 1e3
     flare_t = np.array([s["flare_ontime"] for s in stats]) / 1e3
     closed_t = np.array([s["closed_ontime"] for s in stats]) / 1e3
@@ -950,7 +1014,7 @@ def check_clean(env: dict[str, str], outdir: Path) -> dict[str, Any]:
             )
 
     # ---- Panel (0,1): per-exposure ontime comparison ----
-    ax = axes2[0, 1]
+    ax = axes2_01
     # Sort exposures by instrument, then by raw_ontime descending
     sorted_exp = sorted(all_exposures, key=lambda e: (e["inst"], -e["raw_ontime"]))
     labels = []
@@ -972,13 +1036,13 @@ def check_clean(env: dict[str, str], outdir: Path) -> dict[str, Any]:
         elif e["clean_ontime"] > 0:
             ax.barh(i, clean_vals[i], height=0.7, color=c, alpha=0.8)
     ax.set_yticks(y_pos)
-    ax.set_yticklabels(labels, fontsize=7)
+    ax.set_yticklabels(labels, fontsize=8)
     ax.set_xlabel("ONTIME (ks)")
     ax.set_title("Per-exposure time: raw (gray) vs clean (colour)")
     ax.invert_yaxis()
 
-    # ---- Panel (1,0) + (1,1): detailed text summary ----
-    ax = axes2[1, 0]
+    # ---- Panel (1,0): detailed text summary (spanning full width) ----
+    ax = axes2_10
     tlines = []
     tlines.append(
         f"{'Inst':<4} {'Exp':<6} {'Status':<8} {'Filter':<8} {'Raw(ks)':>8} {'Clean(ks)':>9} {'Retained':>8} {'Raw rows':>10} {'Clean rows':>10}"
@@ -1009,27 +1073,16 @@ def check_clean(env: dict[str, str], outdir: Path) -> dict[str, Any]:
         "\n".join(tlines),
         va="top",
         family="monospace",
-        fontsize=6,
+        fontsize=7.5,
         transform=ax.transAxes,
     )
     ax.set_axis_off()
-    ax.set_title("Per-exposure cleaning detail", fontsize=9)
-
-    ax = axes2[1, 1]
-    ax.set_axis_off()
+    ax.set_title("Per-exposure cleaning detail", fontsize=10)
 
     # ---- Row 2 (if present): espfilt rate curves for S-exposures ----
     if n_lc > 0:
         for i_lc, exp in enumerate(s_exposures[:n_lc]):
-            col = i_lc % 2
-            row_idx = 2 if n_lc <= 2 else 2
-            if n_lc == 1:
-                ax = axes2[2, 0]
-                axes2[2, 1].set_axis_off()
-            elif n_lc == 2:
-                ax = axes2[2, i_lc]
-            else:
-                ax = axes2[2, i_lc] if i_lc < 2 else axes2[2, 1]
+            ax = rate_axes[i_lc]
             lc = _read_espfilt_lc(exp["espdir"])
             gtis = _read_espfilt_gti(exp["espdir"])
             if lc is not None:
@@ -1059,14 +1112,14 @@ def check_clean(env: dict[str, str], outdir: Path) -> dict[str, Any]:
                         (gs - t0) / 1e3, (ge - t0) / 1e3, color="steelblue", alpha=0.15
                     )
                 ax.set_xlabel("Time since start (ks)")
-                ax.set_ylabel("ct/s (2.5-8 keV)")
+                ax.set_ylabel("FOV rate (ct/s)")
                 title_pct = ""
-                if exp["raw_ontime"] > 0:
+                if exp["raw_ontime"] > 0 and exp["clean_ontime"] > 0:
                     title_pct = (
                         f" — {100*exp['clean_ontime']/exp['raw_ontime']:.0f}% retained"
                     )
                 ax.set_title(
-                    f"{exp['inst']} {exp['short']} rate curve{title_pct}", fontsize=9
+                    f"{exp['inst']} {exp['short']} espfilt rate{title_pct}", fontsize=9
                 )
             else:
                 ax.text(

@@ -19,6 +19,8 @@ set -euo pipefail
 #   * epiclccorr can retry with applyabsolutecorrections=no when geometry causes
 #     ZeroAreaCorrection / ZeroArfgenArea,
 #   * spectra use higher detector-map sampling by default.
+#
+# Remember to run: source "$SAS_DIR/setsas.sh" before starting
 ###############################################################################
 
 if [[ $# -lt 2 ]]; then
@@ -45,6 +47,7 @@ HELPER_DIR="$SCRIPT_DIR/scripts"
 
 : "${CLEAN_PI_MIN:=200}"
 : "${CLEAN_PI_MAX:=12000}"
+: "${CLEAN_SKIP_ESPFILT:=no}"
 : "${ESPFILT_RANGESCALE_PN:=25.0}"
 : "${ESPFILT_RANGESCALE_MOS:=20.0}"
 : "${ESPFILT_ALLOWSIGMA:=3.0}"
@@ -72,13 +75,13 @@ HELPER_DIR="$SCRIPT_DIR/scripts"
 
 : "${SRC_DX_ARCSEC:=0.0}"
 : "${SRC_DY_ARCSEC:=0.0}"
-: "${SRC_R_ARCSEC:=60.0}"
+: "${SRC_R_ARCSEC:=500.0}"
 : "${BKG_MODE:=annulus}"
 : "${BKG_DX_ARCSEC:=0.0}"
 : "${BKG_DY_ARCSEC:=0.0}"
-: "${BKG_R_ARCSEC:=150.0}"
-: "${BKG_RIN_ARCSEC:=90.0}"
-: "${BKG_ROUT_ARCSEC:=150.0}"
+: "${BKG_R_ARCSEC:=550.0}"
+: "${BKG_RIN_ARCSEC:=500.0}"
+: "${BKG_ROUT_ARCSEC:=550.0}"
 : "${FIELD_SOURCE_MASK_R_ARCSEC:=20.0}"
 : "${CONTAM_SAMPLE_STEP_S:=5.0}"
 : "${CONTAM_MIN_GOOD_SPAN_S:=0.0}"
@@ -108,17 +111,32 @@ HELPER_DIR="$SCRIPT_DIR/scripts"
 : "${SPECGROUP_MINCOUNTS:=25}"
 : "${SPECGROUP_OVERSAMPLE:=3.0}"
 
+: "${SHORTLINK_NAME:=}"
+: "${SHORTLINK_KEEP:=no}"
+
 mkdir -p "$WORKDIR"
 
 # Create a short symlink to WORKDIR to avoid CFITSIO/fparkey path-length limits.
 # SAS/FTOOLS silently fail when paths exceed ~160 chars (common on WSL+OneDrive).
+#
+# Set SHORTLINK_NAME in config.env for a deterministic name that survives across
+# runs (e.g. SHORTLINK_NAME=c2025n1 → /tmp/_xmm_c2025n1). Without it the name
+# includes the PID and changes every run.
+# Set SHORTLINK_KEEP=yes to leave the symlink alive after the pipeline exits.
 REAL_WORKDIR="$WORKDIR"
-_SHORTLINK="/tmp/_xmmpipe_2_$$"
+if [[ -n "$SHORTLINK_NAME" ]]; then
+  _SHORTLINK="/tmp/_xmm_${SHORTLINK_NAME}"
+else
+  _SHORTLINK="/tmp/_xmmpipe_2_$$"
+fi
 if [[ ${#WORKDIR} -gt 60 ]]; then
   rm -f "$_SHORTLINK"
   ln -sf "$WORKDIR" "$_SHORTLINK"
   WORKDIR="$_SHORTLINK"
-  trap 'rm -f "$_SHORTLINK"' EXIT
+  _keep="${SHORTLINK_KEEP,,}"
+  if [[ "$_keep" != "1" && "$_keep" != "y" && "$_keep" != "yes" && "$_keep" != "true" ]]; then
+    trap 'rm -f "$_SHORTLINK"' EXIT
+  fi
 fi
 
 LOGDIR="$WORKDIR/logs"
@@ -241,10 +259,10 @@ setup_sas_env() {
   local sumsas
   sumsas="$(find "$WORKDIR/init" -maxdepth 1 -type f -name '*SUM.SAS' | sort | head -n 1 || true)"
   [[ -n "$sumsas" ]] && export SAS_ODF="$sumsas"
-  # Patch the SUM.SAS internal PATH to the current short symlink so SAS can
-  # locate ODF files even if the PID (and thus the symlink name) changed.
+  # Patch the SUM.SAS internal PATH to the real directory so it survives
+  # after the /tmp/ short symlink is cleaned up.
   if [[ -n "$sumsas" && -f "$sumsas" ]]; then
-    sed -i "s|^PATH .*|PATH $WORKDIR/init/|" "$sumsas"
+    sed -i "s|^PATH .*|PATH $REAL_WORKDIR/init/|" "$sumsas"
   fi
 }
 
@@ -415,6 +433,49 @@ merged_clean_evt() {
   echo "$WORKDIR/clean/${inst}_clean_merged.fits"
 }
 
+flare_gti_for_inst() {
+  local inst="$1"
+  echo "$WORKDIR/clean/${inst}_flare_gti.fits"
+}
+
+merge_flare_gtis() {
+  local out="$1"
+  shift
+  python3 - "$out" "$@" <<'PYGTI'
+import sys
+from astropy.io import fits
+from astropy.table import Table, vstack
+import numpy as np
+
+out_path = sys.argv[1]
+gti_files = sys.argv[2:]
+tables = []
+for f in gti_files:
+    with fits.open(f) as hdul:
+        for ext in hdul[1:]:
+            if hasattr(ext, 'columns') and 'START' in [c.name for c in ext.columns]:
+                tables.append(Table(ext.data))
+                break
+if not tables:
+    print("WARNING: no GTI rows found in input files", file=sys.stderr)
+    sys.exit(1)
+merged = vstack(tables)
+# Reject dummy/absurd GTI rows (espfilt sometimes emits START=0 STOP=1e99)
+max_valid = 1e12  # ~31,700 years in seconds; XMM times are ~8e8
+keep = (merged['START'] > 0) & (merged['STOP'] < max_valid)
+nrej = len(merged) - int(np.sum(keep))
+if nrej > 0:
+    print(f"Rejected {nrej} GTI rows with absurd bounds", file=sys.stderr)
+merged = merged[keep]
+if len(merged) == 0:
+    print("WARNING: no valid GTI rows remain after sanitization", file=sys.stderr)
+    sys.exit(1)
+merged.sort('START')
+merged.write(out_path, format='fits', overwrite=True)
+print(f"Merged {len(merged)} GTI intervals from {len(gti_files)} files into {out_path}")
+PYGTI
+}
+
 inst_comet_evt() {
   local inst="$1"
   echo "$WORKDIR/comet/${inst}_comet.fits"
@@ -505,8 +566,8 @@ stage_init() {
   sumsas="$(find "$WORKDIR/init" -maxdepth 1 -type f -name '*SUM.SAS' | sort | head -n 1 || true)"
   [[ -n "$sumsas" ]] || { echo "Could not find *SUM.SAS after odfingest" >&2; exit 1; }
   cat > "$WORKDIR/sas_setup.env" <<EOF
-export SAS_CCF="$WORKDIR/init/ccf.cif"
-export SAS_ODF="$sumsas"
+export SAS_CCF="${REAL_WORKDIR}/init/ccf.cif"
+export SAS_ODF="${sumsas/$WORKDIR/$REAL_WORKDIR}"
 EOF
 
   # Symlink all raw ODF files (excluding .gz.gpg/.tar.gz archives) into init/,
@@ -522,7 +583,7 @@ EOF
     odf_base="$(basename "$odf_file")"
     [[ -e "$WORKDIR/init/$odf_base" ]] || ln -sf "$odf_file" "$WORKDIR/init/$odf_base"
   done
-  sed -i "s|^PATH .*|PATH $WORKDIR/init/|" "$sumsas"
+  sed -i "s|^PATH .*|PATH $REAL_WORKDIR/init/|" "$sumsas"
 
   popd >/dev/null
 }
@@ -565,8 +626,8 @@ stage_repro() {
   [[ -f "$ahf" ]] || { echo "AHF/ATS file not found: $ahf" >&2; exit 1; }
 
   cat > "$WORKDIR/attitude.env" <<EOF
-ATTHKGEN_FILE="$atthk"
-ATTHK_FILE="$atthk"
+ATTHKGEN_FILE="${atthk/$WORKDIR/$REAL_WORKDIR}"
+ATTHK_FILE="${atthk/$WORKDIR/$REAL_WORKDIR}"
 AHF_FILE="$ahf"
 EOF
   popd >/dev/null
@@ -604,37 +665,50 @@ clean_one_event() {
   ln -sf "$evt" input.fits
 
   local espfilt_ok=1
-  if [[ "$inst" == "PN" ]]; then
+  if bool_yes "$CLEAN_SKIP_ESPFILT"; then
+    espfilt_ok=0
+    echo "NOTE: espfilt skipped for ${inst}/${base} (CLEAN_SKIP_ESPFILT=yes)"
+  elif [[ "$inst" == "PN" ]]; then
     runlog "clean_espfilt_${inst}_${base}" espfilt eventfile=input.fits method=histogram withoot=no rangescale="$ESPFILT_RANGESCALE_PN" allowsigma="$ESPFILT_ALLOWSIGMA" || espfilt_ok=0
   else
     runlog "clean_espfilt_${inst}_${base}" espfilt eventfile=input.fits method=histogram withoot=no rangescale="$ESPFILT_RANGESCALE_MOS" allowsigma="$ESPFILT_ALLOWSIGMA" || espfilt_ok=0
   fi
 
-  local flare_evt="" flare_gti=""
   if [[ "$espfilt_ok" -eq 1 ]]; then
-    flare_evt="$(ls -1 *allevc.fits *clean*fits *filtered*fits 2>/dev/null | head -n 1 || true)"
-    flare_gti="$(ls -1 *gti*fits *GTI*fits 2>/dev/null | head -n 1 || true)"
+    local espfilt_gti
+    espfilt_gti="$(ls -1 *gti*fits *GTI*fits 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$espfilt_gti" ]]; then
+      cp -f "$espfilt_gti" "$WORKDIR/clean/${inst}/${base}.flare_gti.fits"
+      # Validate: reject dummy GTIs (espfilt sometimes emits START=0 STOP=1e99
+      # for short/unscheduled exposures where it cannot find a flare threshold)
+      local _gti_valid
+      _gti_valid="$(python3 -c "
+import sys
+from astropy.io import fits
+with fits.open(sys.argv[1]) as h:
+    for e in h[1:]:
+        if hasattr(e,'columns') and 'START' in [c.name for c in e.columns]:
+            ok = sum(1 for s,t in zip(e.data['START'],e.data['STOP'])
+                     if float(s) > 0 and float(t) < 1e12)
+            print(ok)
+            break
+" "$WORKDIR/clean/${inst}/${base}.flare_gti.fits" 2>/dev/null || echo "0")"
+      if [[ "${_gti_valid:-0}" -eq 0 ]]; then
+        echo "WARNING: espfilt produced dummy GTI for ${inst}/${base} (all rows absurd); removing"
+        rm -f "$WORKDIR/clean/${inst}/${base}.flare_gti.fits"
+      fi
+    fi
   else
-    echo "WARNING: espfilt failed for ${inst}/${base}; skipping flare filtering"
+    echo "WARNING: espfilt failed for ${inst}/${base}; no flare GTI for this exposure"
   fi
   popd >/dev/null
 
-  local flare_input="$evt"
-  if [[ -n "$flare_evt" ]]; then
-    flare_input="$outdir/$flare_evt"
-  elif [[ -n "$flare_gti" ]]; then
-    local gti_filtered="$WORKDIR/clean/${inst}/${base}.flaregti.fits"
-    evselect table="${evt}:EVENTS" \
-      withfilteredset=yes filteredset="$gti_filtered" \
-      destruct=yes keepfilteroutput=yes updateexposure=yes writedss=yes \
-      expression="GTI($outdir/$flare_gti,TIME)"
-    flare_input="$gti_filtered"
-  fi
-
+  # PI/pattern-filter the ORIGINAL event file — no flare filtering here;
+  # flare GTIs are applied downstream by image/detect/spectrum stages.
   local expr
   expr="$(clean_expr_for_inst "$inst")"
 
-  evselect table="${flare_input}:EVENTS" \
+  evselect table="${evt}:EVENTS" \
     withfilteredset=yes filteredset="$outfile" \
     destruct=yes keepfilteroutput=yes updateexposure=yes writedss=yes \
     expression="$expr"
@@ -688,6 +762,19 @@ stage_clean() {
         attitudelabel=ahf \
         refpointlabel=pnt \
         withatthkset=yes atthkset="$ATTHKGEN_FILE"
+    fi
+
+    # Merge per-exposure espfilt GTIs into a single flare GTI per instrument
+    local merged_gti="$(flare_gti_for_inst "$inst")"
+    if [[ "$FORCE" == "1" || ! -s "$merged_gti" ]]; then
+      local -a gti_list=()
+      local gf
+      for gf in "$WORKDIR/clean/$inst"/*.flare_gti.fits; do
+        [[ -f "$gf" ]] && gti_list+=("$gf")
+      done
+      if [[ ${#gti_list[@]} -gt 0 ]]; then
+        merge_flare_gtis "$merged_gti" "${gti_list[@]}"
+      fi
     fi
   done
 }
@@ -774,18 +861,23 @@ stage_detect() {
     local short_atthk="$tmpmos/atthk.dat"
     cp -f "$stack_atthk" "$short_atthk"
     local mosaic_args=(atthkfile="$short_atthk" pseudoexpid=10)
-    if [[ -f "$pn_evt" ]]; then
-      cp -f "$pn_evt" "$tmpmos/pn.fits"
-      mosaic_args+=(pnevtfile="$tmpmos/pn.fits")
-    fi
-    if [[ -f "$m1_evt" ]]; then
-      cp -f "$m1_evt" "$tmpmos/m1.fits"
-      mosaic_args+=(mos1evtfile="$tmpmos/m1.fits")
-    fi
-    if [[ -f "$m2_evt" ]]; then
-      cp -f "$m2_evt" "$tmpmos/m2.fits"
-      mosaic_args+=(mos2evtfile="$tmpmos/m2.fits")
-    fi
+    # Pre-filter event files with flare GTIs for source detection
+    local _det_inst _det_evt _det_gti _det_key
+    for _det_inst in PN:pn:pnevtfile M1:m1:mos1evtfile M2:m2:mos2evtfile; do
+      IFS=: read -r _det_key _det_short _det_param <<< "$_det_inst"
+      _det_evt="$(merged_clean_evt "$_det_key")"
+      [[ -f "$_det_evt" ]] || continue
+      _det_gti="$(flare_gti_for_inst "$_det_key")"
+      if [[ -f "$_det_gti" ]]; then
+        evselect table="${_det_evt}:EVENTS" \
+          withfilteredset=yes filteredset="$tmpmos/${_det_short}.fits" \
+          destruct=yes keepfilteroutput=yes updateexposure=yes writedss=yes \
+          expression="GTI(${_det_gti},TIME)"
+      else
+        cp -f "$_det_evt" "$tmpmos/${_det_short}.fits"
+      fi
+      mosaic_args+=(${_det_param}="$tmpmos/${_det_short}.fits")
+    done
 
     pushd "$tmpmos" >/dev/null
     emosaic_prep "${mosaic_args[@]}"
@@ -796,6 +888,17 @@ stage_detect() {
     mv "$tmpmos"/prep_mosaic_* "$WORKDIR/detect_mosaic/" 2>/dev/null || true
     mv "$tmpmos"/gti_positions.ds "$WORKDIR/detect_mosaic/" 2>/dev/null || true
     rm -rf "$tmpmos"
+    # Fix broken symlinks inside prep_mosaic dirs: emosaic_prep creates
+    # symlinks pointing through the /tmp/ short-link; re-target them to
+    # REAL_WORKDIR so they survive after the symlink is cleaned up.
+    local _link _target _fixed
+    for _link in "$WORKDIR/detect_mosaic"/prep_mosaic_*/*SUM.SAS \
+                 "$WORKDIR/detect_mosaic"/prep_mosaic_*/ccf.cif; do
+      [[ -L "$_link" ]] || continue
+      _target="$(readlink "$_link")"
+      _fixed="${_target/$WORKDIR/$REAL_WORKDIR}"
+      [[ "$_fixed" != "$_target" ]] && ln -sfn "$_fixed" "$_link"
+    done
     touch "$mosaic_done"
   fi
 
@@ -1017,6 +1120,9 @@ PY
     local moved_sum
     moved_sum="$(find "$ingest_dir" -maxdepth 1 -type f -name '*SUM.SAS' | sort | head -n 1 || true)"
     [[ -n "$moved_sum" ]] || { echo "odfingest did not create a moved *SUM.SAS under $ingest_dir" >&2; exit 1; }
+    # Patch SUM.SAS PATH to the moved ODF directory (using REAL_WORKDIR so
+    # the path survives after the /tmp/ short symlink is cleaned up).
+    sed -i "s|^PATH .*|PATH ${temp_odf_dir/$WORKDIR/$REAL_WORKDIR}/|" "$moved_sum"
 
     (
       export SAS_CCF="$SAS_CCF"
@@ -1024,6 +1130,75 @@ PY
       export SAS_ATTITUDE=AHF
       atthkgen atthkset="$moved_atthk"
     )
+
+    # ------------------------------------------------------------------
+    # Patch the ATTHK pointing to precisely follow the comet ephemeris.
+    # atthkgen sometimes fails to propagate attmove corrections into the
+    # AHFRA/AHFDEC columns (observed: moved vs original ATTHK identical).
+    # We fix this by interpolating the comet track onto the ATTHK time
+    # grid and replacing the AHFRA/AHFDEC values so the pointing follows
+    # the comet exactly, with the constant boresight offset preserved
+    # from the reference epoch.
+    # ------------------------------------------------------------------
+    python3 - "$moved_atthk" \
+             "$WORKDIR/track/comet_track.fits" \
+             "$WORKDIR/repro/atthk.dat" \
+             "$COMET_REF_RA" "$COMET_REF_DEC" <<'PYFIX'
+import sys, numpy as np
+from astropy.io import fits
+from astropy.time import Time
+from scipy.interpolate import interp1d
+
+moved_path, track_path, orig_atthk_path = sys.argv[1], sys.argv[2], sys.argv[3]
+ref_ra, ref_dec = float(sys.argv[4]), float(sys.argv[5])
+
+# ── Read comet track (MJD → XMM TT seconds) ──
+with fits.open(track_path) as h:
+    cmjd = h["OBJTRACK"].data["MJD"].astype(np.float64)
+    cra  = h["OBJTRACK"].data["RA"].astype(np.float64)
+    cdec = h["OBJTRACK"].data["DEC"].astype(np.float64)
+t0_tt = Time("1998-01-01T00:00:00", scale="tt")
+ct_xmm = (Time(cmjd, format="mjd", scale="tt") - t0_tt).sec
+
+# ── Read original ATTHK (to get the reference-epoch boresight offset) ──
+with fits.open(orig_atthk_path) as h:
+    ot   = h["ATTHK"].data["TIME"].astype(np.float64)
+    o_ra = h["ATTHK"].data["AHFRA"].astype(np.float64)
+    o_dec= h["ATTHK"].data["AHFDEC"].astype(np.float64)
+
+# Interpolate comet position at each original ATTHK time
+f_cra  = interp1d(ct_xmm, cra,  bounds_error=False, fill_value="extrapolate")
+f_cdec = interp1d(ct_xmm, cdec, bounds_error=False, fill_value="extrapolate")
+
+# Find the reference-epoch boresight offset (pointing − comet) at the time
+# closest to when the comet was at (ref_ra, ref_dec).
+ref_comet_t = interp1d(cra, ct_xmm, bounds_error=False, fill_value="extrapolate")(ref_ra)
+ref_pnt_ra  = float(interp1d(ot, o_ra,  bounds_error=False, fill_value="extrapolate")(ref_comet_t))
+ref_pnt_dec = float(interp1d(ot, o_dec, bounds_error=False, fill_value="extrapolate")(ref_comet_t))
+d_ra  = ref_pnt_ra  - ref_ra
+d_dec = ref_pnt_dec - ref_dec
+print(f"[patch_atthk] boresight offset at ref epoch: dRA={d_ra*3600:.1f}\", dDEC={d_dec*3600:.1f}\"")
+
+# ── Patch the moved ATTHK ──
+with fits.open(moved_path, mode="update") as h:
+    mt = h["ATTHK"].data["TIME"].astype(np.float64)
+    new_ra  = f_cra(mt)  + d_ra
+    new_dec = f_cdec(mt) + d_dec
+    old_ra  = h["ATTHK"].data["AHFRA"].copy()
+    h["ATTHK"].data["AHFRA"]  = new_ra.astype(np.float64)
+    h["ATTHK"].data["AHFDEC"] = new_dec.astype(np.float64)
+    shift_ra  = new_ra - old_ra
+    shift_dec = new_dec - h["ATTHK"].data["AHFDEC"]  # should be ~0 now
+    h.flush()
+
+# Verify
+with fits.open(moved_path) as h:
+    m_ra  = h["ATTHK"].data["AHFRA"]
+    m_dec = h["ATTHK"].data["AHFDEC"]
+    print(f"[patch_atthk] patched AHFRA  range: [{m_ra.min():.6f}, {m_ra.max():.6f}]")
+    print(f"[patch_atthk] patched AHFDEC range: [{m_dec.min():.6f}, {m_dec.max():.6f}]")
+    print(f"[patch_atthk] max RA correction:  {np.abs(shift_ra).max()*3600:.1f} arcsec")
+PYFIX
 
     # Write env with real (non-symlinked) paths so it survives across runs
     local real_moved_env="${moved_env/$WORKDIR/$REAL_WORKDIR}"
@@ -1042,6 +1217,16 @@ EOF
   fi
 
   source "$moved_env"
+  # Re-derive paths through current $WORKDIR and patch SUM.SAS PATH using
+  # REAL_WORKDIR so it survives after the /tmp/ short symlink is cleaned up.
+  export SAS_CCF="$WORKDIR/init/ccf.cif"
+  local cur_moved_sum
+  cur_moved_sum="$(find "$WORKDIR/comet/moved_odf/ingest" -maxdepth 1 -type f -name '*SUM.SAS' | sort | head -n 1 || true)"
+  if [[ -n "$cur_moved_sum" && -f "$cur_moved_sum" ]]; then
+    export SAS_ODF="$cur_moved_sum"
+    sed -i "s|^PATH .*|PATH $REAL_WORKDIR/comet/moved_odf/odf/|" "$cur_moved_sum"
+  fi
+  export MOVED_ATTHK_FILE="$WORKDIR/comet/moved_atthk.dat"
   cp -f "$MOVED_AHF_FILE" "$WORKDIR/comet/comet_atthk.fits"
 
   local inst infile outfile
@@ -1115,11 +1300,11 @@ stage_contam() {
   done
 
   cat > "$WORKDIR/contam/science_selection.env" <<EOF
-SCIENCE_GTI="$WORKDIR/contam/science_gti.fits"
+SCIENCE_GTI="$REAL_WORKDIR/contam/science_gti.fits"
 SCIENCE_GTI_POLICY="$SCIENCE_GTI_POLICY"
-SCIENCE_TRAIL_MASK="$WORKDIR/contam/EPIC_trail_mask.fits"
+SCIENCE_TRAIL_MASK="$REAL_WORKDIR/contam/EPIC_trail_mask.fits"
 SCIENCE_APPLY_TRAIL_MASK="$SCIENCE_APPLY_TRAIL_MASK"
-SCIENCE_SOURCE_LIST="$contam_srclist"
+SCIENCE_SOURCE_LIST="${contam_srclist/$WORKDIR/$REAL_WORKDIR}"
 EOF
 }
 
@@ -1136,6 +1321,22 @@ stage_image() {
   local moved_ahf="$WORKDIR/comet/moved_atthk.dat"
   need_file "$moved_ahf"
 
+  # Pre-create flare-filtered event files for imaging and exposure maps.
+  # Full (unfiltered) comet-frame event lists are preserved for light curves.
+  local _img_inst _img_src _img_gti _img_filt
+  for _img_inst in $(selected_insts); do
+    _img_src="$(inst_comet_evt "$_img_inst")"
+    [[ -f "$_img_src" ]] || continue
+    _img_gti="$(flare_gti_for_inst "$_img_inst")"
+    _img_filt="$WORKDIR/images/${_img_inst}_filt_events.fits"
+    if [[ -f "$_img_gti" && ( "$FORCE" == "1" || ! -s "$_img_filt" ) ]]; then
+      evselect table="${_img_src}:EVENTS" \
+        withfilteredset=yes filteredset="$_img_filt" \
+        destruct=yes keepfilteroutput=yes updateexposure=yes writedss=yes \
+        expression="GTI(${_img_gti},TIME)"
+    fi
+  done
+
   local line label pimin pimax inst evt img exp
   while read -r line; do
     [[ -n "$line" ]] || continue
@@ -1144,7 +1345,13 @@ stage_image() {
     mkdir -p "$banddir"
     local -a counts=() expos=()
     for inst in $(selected_insts); do
-      evt="$(inst_comet_evt "$inst")"
+      # Use flare-filtered events if available, otherwise full event list
+      local _filt="$WORKDIR/images/${inst}_filt_events.fits"
+      if [[ -f "$_filt" ]]; then
+        evt="$_filt"
+      else
+        evt="$(inst_comet_evt "$inst")"
+      fi
       [[ -f "$evt" ]] || continue
       img="$banddir/${inst}_counts.fits"
       exp="$banddir/${inst}_exp.fits"
@@ -1417,10 +1624,15 @@ stage_spectrum() {
 
     spec_evt="$WORKDIR/spectra/${inst}_spec_events.fits"
     if [[ "$FORCE" == "1" || ! -s "$spec_evt" ]]; then
+      local spec_gti_expr="GTI($WORKDIR/contam/science_gti.fits,TIME)"
+      local spec_flare_gti="$(flare_gti_for_inst "$inst")"
+      if [[ -f "$spec_flare_gti" ]]; then
+        spec_gti_expr="${spec_gti_expr}&&GTI(${spec_flare_gti},TIME)"
+      fi
       evselect table="${evt}:EVENTS" \
         withfilteredset=yes filteredset="$spec_evt" \
         destruct=yes keepfilteroutput=yes updateexposure=yes writedss=yes \
-        expression="GTI($WORKDIR/contam/science_gti.fits,TIME)&&(PI in [$SPEC_PI_MIN:$SPEC_PI_MAX])"
+        expression="${spec_gti_expr}&&(PI in [$SPEC_PI_MIN:$SPEC_PI_MAX])"
     fi
     if [[ "$(fits_rows "$spec_evt")" -le 0 ]]; then
       echo "No events left for $inst spectrum after science GTI and PI cut; skipping" >&2

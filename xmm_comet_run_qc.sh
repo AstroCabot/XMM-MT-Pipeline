@@ -35,6 +35,30 @@ python3 "$SCRIPT_DIR/scripts/xmm_qc_manifest.py" manifest \
   --config "$CONFIG_FILE" \
   --outdir "$WORKDIR/qc"
 
+# ---------------------------------------------------------------------------
+# Quick comet-frame diagnostic (counts-only, no eexpmap — runs in seconds).
+# Only requires comet/ stage outputs to exist.
+# ---------------------------------------------------------------------------
+if ls "$WORKDIR/comet/"*_comet.fits 1>/dev/null 2>&1; then
+  # Parse PI range from first IMAGE_BANDS entry (e.g. "soft:200:1000")
+  IFS=':' read -r _qd_name _qd_pimin _qd_pimax <<< "${IMAGE_BANDS%%\;*}"
+  _qd_pimin="${_qd_pimin:-200}"
+  _qd_pimax="${_qd_pimax:-2000}"
+
+  : "${QC_QUICKDIAG_NBINS:=10}"
+  : "${QC_QUICKDIAG_BIN_ARCSEC:=8.0}"
+
+  python3 "$SCRIPT_DIR/scripts/xmm_comet_quick_diag.py" "$WORKDIR" \
+    --pimin "$_qd_pimin" --pimax "$_qd_pimax" \
+    --nbins "$QC_QUICKDIAG_NBINS" \
+    --bin-arcsec "$QC_QUICKDIAG_BIN_ARCSEC" \
+    --radius-arcsec "${IMAGE_RADIUS_ARCSEC:-900}" \
+    --src-r-arcsec "${SRC_R_ARCSEC:-500}" || true
+  echo "  Quick diagnostic: $WORKDIR/qc/quick_diag/"
+else
+  echo "  Skipping quick diagnostic (no comet-frame event lists yet)"
+fi
+
 python3 "$SCRIPT_DIR/scripts/xmm_comet_quick_checks.py" \
   --config "$CONFIG_FILE" \
   --outdir "$WORKDIR/qc" \
@@ -88,3 +112,5 @@ echo "  $WORKDIR/qc/05_lcurve.png"
 echo "  $WORKDIR/qc/06_spectrum.png"
 echo "  $WORKDIR/qc/07_spotchecks_${QC_SPOTCHECK_BAND}.png"
 echo "  $WORKDIR/qc/08_mosaics.png"
+echo "  $WORKDIR/qc/quick_diag/mosaic.png"
+echo "  $WORKDIR/qc/quick_diag/comparison.png"
