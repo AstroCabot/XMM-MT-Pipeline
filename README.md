@@ -11,8 +11,9 @@ It keeps the same main entry points and stage outputs, but trims the QC wrapper 
 Use the included starting config:
 
 ```bash
-./xmm_comet_pipeline.sh my_comet.lean.env all
-./xmm_comet_run_qc.sh my_comet.lean.env
+source "$SAS_DIR/setsas.sh"
+./xmm_comet_pipeline.sh my_comet.env all
+./xmm_comet_run_qc.sh my_comet.env
 ```
 
 ## Retained behavior
@@ -29,3 +30,10 @@ Use the included starting config:
 - reduced `xmm_comet_run_qc.sh` to a thin wrapper
 - merged `trail_mask_utils.py` into `trail_mask_tools.py`
 - kept the earlier science-facing fixes and stage interfaces intact
+
+## Documentation
+
+- `docs/QC_GUIDE.md` — interpretation guide for the main QC plots
+- `docs/REFACTOR_NOTES.md` — summary of the key implementation changes
+- `docs/NOTES.md` — line-count metrics for this compact repack
+- `docs/VALIDATION.md` — what has and hasn't been checked

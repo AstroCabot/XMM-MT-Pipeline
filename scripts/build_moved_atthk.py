@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+\"\"\"Build a comet-tracking (\"moved\") ATTHK file.
+
+Replaces the inline Python that was embedded in the old pipeline shell
+script.  At each ATTHK time sample the comet position is interpolated
+from the ephemeris track, the offset from the comet to the real
+telescope pointing is computed, and that same offset is applied to a
+fixed reference attitude.  The result is an ATTHK whose boresight
+follows the comet in the sky, so that SAS imaging tools (evselect,
+eexpmap) produce comet-centred products.
+\"\"\"
 from __future__ import annotations
 import argparse
 import json
