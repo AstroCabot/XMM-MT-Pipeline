@@ -1089,13 +1089,12 @@ except Exception:
 PY
 )" || { echo "Could not determine the relative path of the original ATS/AHF inside ODFDIR" >&2; exit 1; }
 
-  if [[ "$FORCE" == "1" || ! -s "$moved_env" || ! -s "$moved_atthk" ]]; then
-    rm -rf "$temp_odf_dir" "$ingest_dir"
-    mkdir -p "$temp_odf_dir" "$ingest_dir"
-
+  # --- sub-step 1: attmove (create moved ODF symlink tree + shifted AHF) ---
+  if [[ "$FORCE" == "1" || ! -s "$temp_odf_dir/$relpath" ]]; then
+    rm -rf "$temp_odf_dir"
+    mkdir -p "$temp_odf_dir"
     cp -as "${ODFDIR%/}/." "$temp_odf_dir"/
     find "$temp_odf_dir" \( -name '*SUM.SAS' -o -name 'ccf.cif' \) -exec rm -f {} +
-
     mkdir -p "$(dirname "$temp_odf_dir/$relpath")"
     rm -f "$temp_odf_dir/$relpath"
 
@@ -1110,13 +1109,26 @@ PY
       minstable="$ATTMOVE_MINSTABLE" \
       creatediagnostics=yes \
       diagfile="$WORKDIR/comet/attmove_diag.fits"
+  else
+    echo "  [skip] attmove output already exists"
+  fi
 
+  # --- sub-step 2: odfingest (re-ingest moved ODF) ---
+  local moved_sum
+  moved_sum="$(find "$ingest_dir" -maxdepth 1 -type f -name '*SUM.SAS' 2>/dev/null | sort | head -n 1 || true)"
+  if [[ "$FORCE" == "1" || -z "$moved_sum" || ! -s "$moved_sum" ]]; then
+    rm -rf "$ingest_dir"
+    mkdir -p "$ingest_dir"
     odfingest odfdir="$temp_odf_dir" outdir="$ingest_dir"
-    local moved_sum
     moved_sum="$(find "$ingest_dir" -maxdepth 1 -type f -name '*SUM.SAS' | sort | head -n 1 || true)"
     [[ -n "$moved_sum" ]] || { echo "odfingest did not create a moved *SUM.SAS under $ingest_dir" >&2; exit 1; }
     sed -i "s|^PATH .*|PATH ${temp_odf_dir/$WORKDIR/$REAL_WORKDIR}/|" "$moved_sum"
+  else
+    echo "  [skip] odfingest SUM.SAS already exists"
+  fi
 
+  # --- sub-step 3: build_moved_atthk.py ---
+  if [[ "$FORCE" == "1" || ! -s "$moved_atthk" ]]; then
     python3 "$HELPER_DIR/build_moved_atthk.py" \
       --input-atthk "$ATTHKGEN_FILE" \
       --track "$WORKDIR/track/comet_track.fits" \
@@ -1124,7 +1136,12 @@ PY
       --ref-ra "$COMET_REF_RA" \
       --ref-dec "$COMET_REF_DEC" \
       --report-json "$WORKDIR/comet/moved_atthk.json"
+  else
+    echo "  [skip] moved_atthk already exists"
+  fi
 
+  # --- sub-step 4: write moved_sas_setup.env ---
+  if [[ "$FORCE" == "1" || ! -s "$moved_env" ]]; then
     local real_moved_env="${moved_env/$WORKDIR/$REAL_WORKDIR}"
     local real_ccf="${SAS_CCF/$WORKDIR/$REAL_WORKDIR}"
     local real_sum="${moved_sum/$WORKDIR/$REAL_WORKDIR}"
@@ -1138,6 +1155,8 @@ export MOVED_ODF_DIR="$real_odf"
 export MOVED_AHF_FILE="$real_odf/$relpath"
 export MOVED_ATTHK_FILE="$real_atthk"
 EOF
+  else
+    echo "  [skip] moved_sas_setup.env already exists"
   fi
 
   source "$moved_env"

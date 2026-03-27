@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-\"\"\"Build a comet-tracking (\"moved\") ATTHK file.
+"""Build a comet-tracking ("moved") ATTHK file.
 
 Replaces the inline Python that was embedded in the old pipeline shell
 script.  At each ATTHK time sample the comet position is interpolated
@@ -8,7 +8,7 @@ telescope pointing is computed, and that same offset is applied to a
 fixed reference attitude.  The result is an ATTHK whose boresight
 follows the comet in the sky, so that SAS imaging tools (evselect,
 eexpmap) produce comet-centred products.
-\"\"\"
+"""
 from __future__ import annotations
 import argparse
 import json
@@ -43,9 +43,12 @@ def _circular_median_deg(values: np.ndarray) -> float:
     vals = np.asarray(values, dtype=float) % 360.0
     if vals.size == 0:
         return math.nan
-    diffs = (vals[:, None] - vals[None, :] + 180.0) % 360.0 - 180.0
-    score = np.sum(np.abs(diffs), axis=1)
-    return float(vals[int(np.argmin(score))])
+    # Unwrap around the circular mean, take the ordinary median, then
+    # re-wrap.  This is O(N log N) / O(N) memory instead of the old
+    # O(N²) pairwise approach that blows up for large ATTHK files.
+    ref = _circular_mean_deg(vals)
+    unwrapped = (vals - ref + 180.0) % 360.0 - 180.0  # centred on 0
+    return float((ref + np.median(unwrapped)) % 360.0)
 
 def _linear_median(values: np.ndarray) -> float:
     vals = np.asarray(values, dtype=float)
@@ -62,8 +65,17 @@ class TrackInterpolator:
         ts = np.asarray(t_sec, dtype=float)
         if ts.size == 0:
             return (np.asarray([], dtype=float), np.asarray([], dtype=float))
+        # The ATTHK housekeeping window often extends beyond the cleaned
+        # event time range (and therefore beyond the comet track).  Rows
+        # outside the track are never used by SAS imaging tools because
+        # they fall outside the event GTIs, so we clamp rather than fail.
         if ts.min() < self.t_sec.min() - 1e-06 or ts.max() > self.t_sec.max() + 1e-06:
-            raise RuntimeError(f'ATTHK time grid extends outside comet track coverage: [{ts.min():.3f}, {ts.max():.3f}] vs [{self.t_sec.min():.3f}, {self.t_sec.max():.3f}]')
+            n_before = int(np.sum(ts < self.t_sec.min() - 1e-06))
+            n_after = int(np.sum(ts > self.t_sec.max() + 1e-06))
+            print(f'WARNING: ATTHK time grid extends outside comet track coverage '
+                  f'({n_before} rows before, {n_after} rows after); '
+                  f'clamping to track endpoints.', file=sys.stderr)
+            ts = np.clip(ts, self.t_sec.min(), self.t_sec.max())
         x = np.interp(ts, self.t_sec, self.xyz[:, 0])
         y = np.interp(ts, self.t_sec, self.xyz[:, 1])
         z = np.interp(ts, self.t_sec, self.xyz[:, 2])
