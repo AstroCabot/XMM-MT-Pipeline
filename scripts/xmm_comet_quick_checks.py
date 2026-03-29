@@ -1703,7 +1703,7 @@ def check_image(
             (
                 clean if clean is not None else rate,
                 "EPIC clean rate" if clean is not None else "EPIC rate",
-                "linear",
+                "rate",
             ),
             (
                 net if net is not None else masked if masked is not None else rate,
@@ -1716,11 +1716,39 @@ def check_image(
                         else "EPIC rate (repeat)"
                     )
                 ),
-                "linear",
+                "symlog",
             ),
         ]
         for ax, (data, title, stretch) in zip(axes[0], top_panels):
-            if stretch == "linear":
+            if stretch == "rate":
+                # Rate image: use sqrt stretch, but limit scale to well-exposed
+                # pixels to avoid FOV-edge artifacts dominating.
+                exp_thresh = np.nanmax(expo) * 0.1 if np.any(np.isfinite(expo)) else 0
+                good = np.isfinite(data) & (expo > exp_thresh)
+                if np.any(good):
+                    vmin = 0.0
+                    vmax = float(np.nanpercentile(data[good], 99.5))
+                    vmax = max(vmax, 1e-30)
+                else:
+                    vmin, vmax = (0.0, 1.0)
+                from matplotlib.colors import PowerNorm
+                im = ax.imshow(
+                    data, origin="lower", extent=extent,
+                    norm=PowerNorm(gamma=0.5, vmin=vmin, vmax=vmax),
+                )
+            elif stretch == "symlog":
+                exp_thresh = np.nanmax(expo) * 0.1 if np.any(np.isfinite(expo)) else 0
+                good = np.isfinite(data) & (expo > exp_thresh)
+                if np.any(good):
+                    absmax = np.nanpercentile(np.abs(data[good]), 99.0)
+                    absmax = max(absmax, 1e-30)
+                else:
+                    absmax = 1.0
+                im = ax.imshow(
+                    data, origin="lower", extent=extent,
+                    vmin=-absmax, vmax=absmax, cmap="RdBu_r",
+                )
+            elif stretch == "linear":
                 finite = np.isfinite(data)
                 if np.any(finite):
                     vmin, vmax = np.nanpercentile(data[finite], [1.0, 99.0])
@@ -1765,13 +1793,34 @@ def check_image(
                 ax.set_axis_off()
                 continue
             finite = np.isfinite(inst_rate)
-            if np.any(finite):
-                vmin, vmax = np.nanpercentile(inst_rate[finite], [1.0, 99.0])
+            # Per-instrument exposure for masking FOV edges
+            inst_exp_path = banddir / f"{inst}_exp.fits"
+            inst_expo = None
+            if inst_exp_path.exists():
+                inst_expo, _ = read_image(str(inst_exp_path))
+            if "net" in inst_title.lower():
+                if inst_expo is not None and np.any(np.isfinite(inst_expo)):
+                    exp_thr = np.nanmax(inst_expo) * 0.1
+                    good = finite & (inst_expo > exp_thr)
+                else:
+                    good = finite
+                if np.any(good):
+                    absmax = np.nanpercentile(np.abs(inst_rate[good]), 99.0)
+                    absmax = max(absmax, 1e-30)
+                else:
+                    absmax = 1.0
+                im = ax.imshow(
+                    inst_rate, origin="lower", extent=extent,
+                    vmin=-absmax, vmax=absmax, cmap="RdBu_r",
+                )
             else:
-                vmin, vmax = (None, None)
-            im = ax.imshow(
-                inst_rate, origin="lower", extent=extent, vmin=vmin, vmax=vmax
-            )
+                if np.any(finite):
+                    vmin, vmax = np.nanpercentile(inst_rate[finite], [1.0, 99.0])
+                else:
+                    vmin, vmax = (None, None)
+                im = ax.imshow(
+                    inst_rate, origin="lower", extent=extent, vmin=vmin, vmax=vmax
+                )
             plt.colorbar(im, ax=ax, pad=0.01, shrink=0.8)
             add_apertures(ax, env)
             ax.set_xlabel("East offset (arcsec)")

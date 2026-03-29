@@ -69,7 +69,8 @@ HELPER_DIR="$SCRIPT_DIR/scripts"
 : "${IMAGE_RADIUS_ARCSEC:=900.0}"
 : "${IMAGE_BIN_ARCSEC:=2.0}"
 : "${IMAGE_MASK_RADIUS_ARCSEC:=$FIELD_SOURCE_MASK_R_ARCSEC}"
-: "${EEXPMAP_ATTREBIN:=0.020626481}"
+: "${SCIENCE_EEXPMAP_ATTREBIN:=4.0}"
+: "${EEXPMAP_ATTREBIN:=$SCIENCE_EEXPMAP_ATTREBIN}"
 
 : "${LC_PI_MIN:=300}"
 : "${LC_PI_MAX:=2000}"
@@ -526,6 +527,7 @@ make_image_grid_if_needed() {
       --event "$refevt" \
       --radius-arcsec "$IMAGE_RADIUS_ARCSEC" \
       --bin-arcsec "$IMAGE_BIN_ARCSEC" \
+      --center-mode median \
       --out-json "$WORKDIR/images/grid.json" > "$WORKDIR/images/grid.env"
   fi
   source "$WORKDIR/images/grid.env"
