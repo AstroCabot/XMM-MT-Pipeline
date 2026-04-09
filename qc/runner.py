@@ -3,9 +3,9 @@
 
 Replaces the old xmm_comet_spotcheck_frames.sh and xmm_qc_build_mosaics.sh
 shell helpers with a single Python entry-point.  Orchestrates:
-  1. Stage manifest (xmm_qc_manifest.py)
-  2. Quick comet-frame diagnostic (xmm_comet_quick_diag.py)
-  3. Full QC checks (xmm_comet_quick_checks.py)
+  1. Stage manifest (manifest.py)
+  2. Quick comet-frame diagnostic (quick_diag.py)
+  3. Full QC checks (checks.py)
   4. QC mosaic building (SAS evselect + eexpmap, then combine + postproc)
   5. Segment spot-checks
   6. Final HTML/Markdown index
@@ -466,7 +466,7 @@ def qc_run(config_file: str) -> None:
     run(
         [
             sys.executable,
-            str(scripts / "xmm_qc_manifest.py"),
+            str(scripts / "manifest.py"),
             "manifest",
             "--config",
             config_file,
@@ -479,7 +479,7 @@ def qc_run(config_file: str) -> None:
             run(
                 [
                     sys.executable,
-                    str(scripts / "xmm_comet_quick_diag.py"),
+                    str(scripts / "quick_diag.py"),
                     str(workdir),
                     "--pimin",
                     str(first_pimin),
@@ -500,7 +500,7 @@ def qc_run(config_file: str) -> None:
     run(
         [
             sys.executable,
-            str(scripts / "xmm_comet_quick_checks.py"),
+            str(scripts / "checks.py"),
             "--config",
             config_file,
             "--outdir",
@@ -510,8 +510,12 @@ def qc_run(config_file: str) -> None:
             "exposures",
             "track",
             "detect",
+            "source-filter",
             "contam",
             "image",
+            "image-per-inst",
+            "radial-profile",
+            "frames",
             "lcurve",
             "spectrum",
         ]
@@ -521,7 +525,7 @@ def qc_run(config_file: str) -> None:
             run(
                 [
                     sys.executable,
-                    str(scripts / "xmm_comet_quick_checks.py"),
+                    str(scripts / "checks.py"),
                     "--config",
                     config_file,
                     "--outdir",
@@ -538,12 +542,42 @@ def qc_run(config_file: str) -> None:
         run(
             [
                 sys.executable,
-                str(scripts / "xmm_comet_quick_checks.py"),
+                str(scripts / "checks.py"),
                 "--config",
                 config_file,
                 "--outdir",
                 str(workdir / "qc"),
                 "mosaics",
+            ]
+        )
+    except Exception:
+        pass
+    # Per-time-slice comet-frame mosaic (pointings)
+    try:
+        run(
+            [
+                sys.executable,
+                str(scripts / "checks.py"),
+                "--config",
+                config_file,
+                "--outdir",
+                str(workdir / "qc"),
+                "pointings",
+            ]
+        )
+    except Exception:
+        pass
+    # Per-instrument pointings
+    try:
+        run(
+            [
+                sys.executable,
+                str(scripts / "checks.py"),
+                "--config",
+                config_file,
+                "--outdir",
+                str(workdir / "qc"),
+                "pointings-per-inst",
             ]
         )
     except Exception:
@@ -556,7 +590,7 @@ def qc_run(config_file: str) -> None:
             run(
                 [
                     sys.executable,
-                    str(scripts / "xmm_comet_quick_checks.py"),
+                    str(scripts / "checks.py"),
                     "--config",
                     config_file,
                     "--outdir",
@@ -571,7 +605,7 @@ def qc_run(config_file: str) -> None:
     run(
         [
             sys.executable,
-            str(scripts / "xmm_qc_manifest.py"),
+            str(scripts / "manifest.py"),
             "index",
             "--config",
             config_file,
@@ -589,11 +623,21 @@ def qc_run(config_file: str) -> None:
         "01_track.png",
         "02_detect.png",
         "03_contam.png",
-        "04_image.png",
+        "03b_source_filter.png",
+        f"04_image_{band}.png",
+        f"04d_image_PN_{band}.png",
+        f"04d_image_M1_{band}.png",
+        f"04d_image_M2_{band}.png",
+        f"04b_radial_{band}.png",
+        f"04c_frames_{band}.png",
         "05_lcurve.png",
         "06_spectrum.png",
         f"07_spotchecks_{band}.png",
         "08_mosaics.png",
+        f"09_pointings_{band}.png",
+        f"09_pointings_{band}_PN.png",
+        f"09_pointings_{band}_M1.png",
+        f"09_pointings_{band}_M2.png",
     ):
         print(f'  {workdir / "qc" / path}')
     print(f'  {workdir / "qc" / "quick_diag" / "mosaic.png"}')

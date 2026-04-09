@@ -1,39 +1,140 @@
-# XMM-Newton comet moving-target pipeline (lean package)
+# XMM-Newton comet moving-target pipeline
 
-This is a further-compacted repack of the refactored 3I/ATLAS EPIC pipeline.
-It keeps the same main entry points and stage outputs, but trims the QC wrapper layer and folds the trail-mask utilities into one module.
+EPIC imaging reduction for moving solar-system targets observed by XMM-Newton.
+The pipeline transforms ODF-level data into comet-frame images, light curves,
+spectra, and merged event lists, with automated field-source contamination
+handling and QC products at every stage.
 
-## Entry points
+See `docs/TECHNICAL.TXT` for a detailed stage-by-stage walkthrough with SAS
+tool references.
 
-- `xmm_comet_pipeline.sh`
-- `xmm_comet_run_qc.sh`
+---
 
-Use the included starting config:
+## Prerequisites
+
+| Requirement | Tested version |
+|---|---|
+| XMM-Newton SAS | 22.1.0 |
+| Python 3 | 3.10+ (astropy, numpy, matplotlib, astroquery) |
+| Bash | 4+ (WSL / Linux) |
+
+Initialise SAS before running anything:
 
 ```bash
-source "$SAS_DIR/setsas.sh"
-./xmm_comet_pipeline.sh my_comet.env all
-./xmm_comet_run_qc.sh my_comet.env
+source /path/to/sas/setsas.sh
 ```
 
-## Retained behavior
+## Quick start
 
-- staged reduction and QC layout
-- moved-target event lists and moved-ATTHK handling
-- per-instrument and EPIC-combined images, light curves, spectra, and merged event lists
-- comet-frame trail masking and image post-processing
-- still-sky detect mosaics and comet-frame spot-check products
+```bash
+# Full reduction from raw ODF to QC plots:
+bash xmm_comet_pipeline.sh my_comet.env all
 
-## Lean-package changes
+# QC only (after a completed reduction):
+bash xmm_comet_run_qc.sh my_comet.env
+```
 
-- consolidated the QC shell helpers into `scripts/xmm_qc_runner.py`
-- reduced `xmm_comet_run_qc.sh` to a thin wrapper
-- merged `trail_mask_utils.py` into `trail_mask_tools.py`
-- kept the earlier science-facing fixes and stage interfaces intact
+### Re-running from a specific stage
 
-## Documentation
+Stages are idempotent — existing outputs are skipped unless `FORCE=1`.
+To rebuild from the comet stage onward:
 
-- `docs/QC_GUIDE.md` — interpretation guide for the main QC plots
-- `docs/REFACTOR_NOTES.md` — summary of the key implementation changes
-- `docs/NOTES.md` — line-count metrics for this compact repack
-- `docs/VALIDATION.md` — what has and hasn't been checked
+```bash
+FORCE=1 bash xmm_comet_pipeline.sh my_comet.env comet image lcurve spectrum merge qc
+```
+
+## Configuration
+
+Copy `config/xmm_comet_config.template.env` to `my_comet.env` and edit it.
+The two required settings are:
+
+| Variable | Purpose |
+|---|---|
+| `WORKDIR` | Absolute path to the output directory |
+| `ODFDIR` | Absolute path to the uncompressed ODF directory |
+
+The target is specified by **one** of:
+
+- `TARGET_ID` + `TARGET_ID_TYPE` — the pipeline queries JPL Horizons automatically.
+- `TRACK_INPUT` — supply a pre-computed ephemeris FITS table.
+
+All other variables have sensible defaults; see the template for the full list.
+
+## Pipeline stages
+
+Run order for a complete reduction:
+
+| # | Stage | Purpose |
+|---|---|---|
+| 1 | `init` | `cifbuild` + `odfingest` — build CCF and SUM.SAS |
+| 2 | `repro` | `epproc` + `emproc` + `atthkgen` — reprocess ODF to calibrated event lists |
+| 3 | `clean` | `espfilt` + `evselect` + `attcalc` + `merge` — flare filtering and PI/FLAG/PATTERN selection |
+| 4 | `track` | Horizons ephemeris query, motion segmentation, reference attitude |
+| 5 | `detect` | `emosaic_prep` + `edetect_stack` — still-sky source detection |
+| 6 | `comet` | `attmove` + `odfingest` + `atthkgen` + `attcalc` — shift to comet rest frame |
+| 7 | `contam` | Policy-based contamination GTIs and spatial trail masks |
+| 8 | `image` | `evselect` (counts) + `eexpmap` (exposure) → combined images per band |
+| 9 | `lcurve` | `evselect` + `epiclccorr` + `elcbuild` — corrected EPIC light curves |
+| 10 | `spectrum` | `especget` + `epicspeccombine` + `specgroup` — source/background spectra + response |
+| 11 | `merge` | `merge` — combined EPIC comet-frame event lists |
+| 12 | `qc` | Automated diagnostic plots |
+
+Meta-stages: `science` runs stages 3–11; `all` runs 1–12.
+
+## Output layout
+
+```
+WORKDIR/
+  init/          ccf.cif, *SUM.SAS
+  repro/         reprocessed event lists, atthk.dat
+  clean/         flare-filtered, PI-selected events per instrument
+  track/         comet_track.fits, motion_segments.csv, ref_attitude.env
+  detect/        field_sources_{all,curated}.fits, mosaics, DS9 regions
+  comet/         moved ODF, moved_atthk.dat, *_comet.fits per instrument
+  contam/        science_gti.fits, contamination products, trail mask
+  images/        per-band counts/exposure/rate images
+  lcurve/        per-instrument + EPIC-combined light curves
+  spectra/       per-instrument + EPIC-combined spectra and responses
+  final/         EPIC_comet_merged_{full,sciencegti}.fits
+  qc/            diagnostic PNGs
+  logs/          per-step logs
+```
+
+## QC plots
+
+| Plot | What to look for |
+|---|---|
+| `detect_sources.png` | Still-sky mosaics with detected sources marked; check track overlay alignment |
+| `image_<band>.png` | Comet-frame counts/exposure/rate panels; field-source trails should be masked |
+| `contam_timeline.png` | Contamination policy comparison (full/src/bkg/strict) |
+| `clean_gti.png` | Per-exposure flare-cleaning fractions |
+| `spotcheck_<band>.png` | Comet should stay fixed; field sources should trail between segments |
+
+## Key design notes
+
+- **Attitude consistency**: the comet-frame ATTHK is generated by running
+  `atthkgen` on the attmove-transformed ODF, guaranteeing that `attcalc`
+  (which reads the AHF) and `eexpmap` (which reads the ATTHK) use the same
+  attitude source. This replaced an earlier Python-based approach
+  (`build_moved_atthk.py`) that disagreed with attmove by ~50″.
+
+- **Field-source handling**: two independent strategies are available —
+  sky-frame spatial filtering before `attcalc` (`SCIENCE_FILTER_FIELD_SOURCES`)
+  and comet-frame 2-D trail masking (`SCIENCE_APPLY_TRAIL_MASK`). When
+  sky-frame filtering is active, the trail mask is skipped.
+
+- **Light-curve correction**: defaults to relative-only correction
+  (`LC_APPLY_ABSOLUTE_CORRECTIONS=no`). If absolute correction fails
+  (common for diffuse sources), the pipeline retries with relative-only;
+  if that also fails, raw counts are preserved.
+
+## File inventory
+
+| Path | Role |
+|---|---|
+| `xmm_comet_pipeline.sh` | Main pipeline driver |
+| `xmm_comet_run_qc.sh` | QC wrapper (calls `qc/runner.py`) |
+| `config/xmm_comet_config.template.env` | Annotated configuration template |
+| `scripts/` | Python helper modules (track building, image combining, masking, etc.) |
+| `qc/` | QC plotting and checking framework |
+| `docs/TECHNICAL.TXT` | Detailed technical reference |

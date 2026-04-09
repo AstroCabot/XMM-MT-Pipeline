@@ -1,0 +1,745 @@
+==============================================================================
+  XMM-Newton Comet Moving-Target Pipeline — Technical Reference
+==============================================================================
+
+This document is an exhaustive walkthrough of each pipeline stage, the SAS
+tools invoked, the parameters used, and the design rationale.  It is intended
+for a reader familiar with XMM-Newton SAS and EPIC data reduction.
+
+Pipeline driver:   xmm_comet_pipeline.sh
+QC entry point:    xmm_comet_run_qc.sh  (thin wrapper around qc/runner.py)
+Configuration:     <user>.env  (see config/xmm_comet_config.template.env)
+
+Usage:
+  bash xmm_comet_pipeline.sh <config.env> <stage> [stage2 ...]
+
+  FORCE=1 reruns a stage even when its output products already exist.
+  ONLY_INSTS="PN M1 M2" selects which EPIC instruments to process.
+
+
+==============================================================================
+  0.  INFRASTRUCTURE
+==============================================================================
+
+Working-directory shortlink
+---------------------------
+XMM SAS tools embed absolute paths in FITS headers and SUM.SAS.  If WORKDIR
+is longer than 60 characters the pipeline creates a temporary symlink under
+/tmp to keep path lengths within SAS limits.  The symlink is cleaned up on
+exit unless SHORTLINK_KEEP=yes.
+
+Logging
+-------
+Every SAS tool invocation goes through `runlog <label> <cmd> [args...]`, which
+timestamps the call in $WORKDIR/logs/pipeline.log and tees full stdout+stderr
+to $WORKDIR/logs/<label>.log.
+
+Utility functions
+-----------------
+  need_cmd <tool>        — abort if the SAS/system command is not on PATH
+  need_file <path>       — abort if a required input file is missing
+  skip_file <path>       — return true if the file exists and FORCE!=1
+  fits_rows <path>       — Python one-liner: count rows in the EVENTS or
+                           first BinTableHDU extension
+  fits_filter <path>     — Python one-liner: read FILTER keyword from EVENTS
+                           (returns "Closed" for calibration exposures)
+  bool_yes <val>         — normalise yes/no/true/false/1/0 to a bash boolean
+  is_skipped / mark_skipped — per-exposure skip list to track exposures that
+                           fail or have been deliberately excluded
+
+
+==============================================================================
+  1.  INIT
+==============================================================================
+
+SAS tools:  cifbuild, odfingest
+
+Purpose:  Build the Current Calibration File index (ccf.cif) and ingest the
+          raw ODF to produce the SAS summary file (*SUM.SAS).
+
+Procedure:
+  1. mkdir $WORKDIR/init; cd into it.
+  2. export SAS_ODF=$ODFDIR; export SAS_CCF=$WORKDIR/init/ccf.cif.
+  3. cifbuild  — produces ccf.cif from the CCF constituents in $SAS_CCFPATH.
+  4. odfingest odfdir=$ODFDIR outdir=$WORKDIR/init  — produces *SUM.SAS.
+  5. Symlink all raw ODF files into $WORKDIR/init/.
+  6. Patch the PATH line inside *SUM.SAS to point to $REAL_WORKDIR/init/.
+  7. Write $WORKDIR/sas_setup.env (SAS_CCF + SAS_ODF exports).
+
+The SUM.SAS PATH rewrite is needed because the working directory may be
+reached through the shortlink, while SAS reads path references literally
+from the summary file.
+
+
+==============================================================================
+  2.  REPRO
+==============================================================================
+
+SAS tools:  epproc, emproc, atthkgen
+
+Purpose:  Reprocess the ODF into calibrated EPIC event lists and generate
+          the still-sky Attitude Time-series History (ATTHK).
+
+Procedure:
+  1. Source sas_setup.env to set SAS_CCF and SAS_ODF.
+  2. epproc  — reprocess all EPIC-pn exposures.
+  3. emproc  — reprocess all EPIC-MOS1 and MOS2 exposures.
+  4. Manifest: locate reprocessed event files by glob and write
+     $WORKDIR/repro/manifest/{PN,M1,M2}_raw.txt.
+  5. atthkgen atthkset=$WORKDIR/repro/atthk.dat
+     Generates the attitude time series from the AHF stored in the ingested
+     ODF.  This ATTHK is used by attcalc in the clean stage.
+  6. Locate the original spacecraft AHF file (*SC*ATS.FIT, *ATTTSR*.FIT,
+     or *AHF*.FIT) in ODFDIR.  Write $WORKDIR/attitude.env recording the
+     paths to the ATTHK and AHF.
+
+
+==============================================================================
+  3.  CLEAN
+==============================================================================
+
+SAS tools:  espfilt, evselect, attcalc, merge
+
+Purpose:  Flare-filter each exposure independently, apply standard
+          PI/FLAG/PATTERN cleaning, recalculate sky coordinates, and
+          produce one merged event list per EPIC instrument.
+
+Per-exposure cleaning (clean_one_event):
+  a) Read FILTER keyword; skip exposures with filter=Closed.
+  b) espfilt method=histogram withoot=no
+       rangescale = ESPFILT_RANGESCALE_PN (default 25.0) for pn
+                    ESPFILT_RANGESCALE_MOS (default 20.0) for MOS
+       allowsigma = ESPFILT_ALLOWSIGMA (default 3.0)
+     Produces a flare GTI.  Sanitised: rows with absurd START/STOP
+     (>1e12 s) are rejected.
+  c) evselect  — apply the instrument-specific cleaning expression:
+       PN:  (FLAG==0)&&(PATTERN<=4)&&(PI in [CLEAN_PI_MIN:CLEAN_PI_MAX])
+       MOS: #XMMEA_EM&&(PATTERN<=12)&&(PI in [CLEAN_PI_MIN:CLEAN_PI_MAX])
+     Defaults: CLEAN_PI_MIN=200, CLEAN_PI_MAX=12000 (0.2–12 keV).
+  d) attcalc eventset=<clean.fits>
+       attitudelabel=ahf  refpointlabel=pnt
+       withatthkset=yes  atthkset=$ATTHK_FILE
+     Refreshes X,Y sky coordinates using the spacecraft AHF attitude and
+     the PNT pointing reference.
+
+Merging:
+  After all exposures for one instrument are cleaned, they are merged with
+  SAS `merge` in a pairwise-reduction loop (merge_pairwise_generic).
+  imagesize = PREMERGE_IMAGE_SIZE_DEG (default 1.5°).
+  attcalc is re-run on the merged product.
+
+  Flare GTIs from each exposure are stacked into one per-instrument GTI
+  file (merge_flare_gtis).
+
+
+==============================================================================
+  4.  TRACK
+==============================================================================
+
+SAS tools:  (none — pure Python)
+Helper:     scripts/make_comet_track_and_segments.py
+
+Purpose:  Build the moving-target ephemeris track and chop it into
+          motion segments for the comet-frame transform.
+
+Inputs:
+  - A reference event list (the first available PN/M1/M2 merged clean
+    product) — provides the observation time window.
+  - TARGET_ID + TARGET_ID_TYPE or TRACK_INPUT.
+
+Procedure:
+  1. If no TRACK_INPUT is supplied, query JPL Horizons for the target
+     position at the cadence given by TRACK_STEP (default 30 s).
+  2. Write comet_track.fits (RA, DEC, TIME columns).
+  3. Segment the track by slewing rate so that within each segment the
+     comet moves less than MAX_SEG_BLUR_ARCSEC (default 1.0″) during
+     one ATTMOVE_GRANULARITY (default 5 s) interval.
+  4. Write motion_segments.csv.
+  5. Determine the comet reference position:
+       If COMET_REF_RA / COMET_REF_DEC are set in the config, use them.
+       Otherwise, take the track midpoint.
+     Write ref_attitude.env (COMET_REF_RA, COMET_REF_DEC).
+
+
+==============================================================================
+  5.  DETECT
+==============================================================================
+
+SAS tools:  atthkgen, emosaic_prep, edetect_stack
+Helpers:    scripts/curate_emllist_for_region.py
+            scripts/make_still_sky_mosaic.py
+
+Purpose:  Detect field sources in the still-sky frame so they can be masked
+          or filtered in later moving-target stages.
+
+Procedure:
+  1. atthkgen  — regenerate a detection-specific ATTHK
+     (stack_atthk.dat) in the still-sky frame.
+
+  2. emosaic_prep  — build pseudo-exposures from the merged clean event
+     lists, applying flare GTIs.  The pseudo-exposures are sorted into
+     $WORKDIR/detect_mosaic/prep_mosaic_<N>/.
+
+  3. Manifest pseudo-exposures: copy event pseudo-exposure datasets to a
+     temporary detection workspace; build stack_eventsets.txt; write a
+     diagnostic pseudoexposure_manifest.tsv.  Skip any pseudo-exposure
+     with zero events or zero GTI rows.
+
+  4. edetect_stack
+       eventsets=@stack_eventsets.txt
+       attitudesets=<stack_atthk.dat>
+       pimin / pimax: one or more energy bands from SRCDET_BANDS
+         (e.g. 200:500;500:1000;1000:2000;2000:4500;4500:12000)
+       mlmin = DETECT_MIN_ML (default 10.0)
+     Runs simultaneous PSF fitting across all EPIC instruments and bands.
+
+  5. curate_emllist_for_region.py is called twice:
+     a) field_sources_all.fits / .reg — full source list, no track
+        exclusion.
+     b) field_sources_curated.fits / .reg — sources within
+        DETECT_EXCLUDE_TRACK_ARCSEC (default 30″) of the comet track
+        are removed.
+
+  6. make_still_sky_mosaic.py — for each DETECT_QC_BANDS band, build a
+     binned still-sky mosaic image overlaid with the source list and the
+     track.  These feed the detect_sources.png QC plot.
+
+
+==============================================================================
+  6.  COMET — Moving-Target Frame Transformation
+==============================================================================
+
+SAS tools:  attmove, odfingest, atthkgen, attcalc
+Helpers:    scripts/filter_field_sources.py
+
+This is the core moving-target stage.  It shifts the spacecraft attitude
+so that events are projected onto a reference position fixed to the comet,
+rather than fixed to the sky.
+
+Sub-step 1 — attmove
+  Input:   original AHF (spacecraft attitude history)
+  Output:  moved AHF in a symlink copy of the ODF tree
+  Key parameters:
+    track          = comet_track.fits
+    withrefatt=yes
+    refra           = COMET_REF_RA
+    refdec          = COMET_REF_DEC
+    granularity     = ATTMOVE_GRANULARITY (default 5 s)
+    minstable       = ATTMOVE_MINSTABLE   (default 30 s)
+    creatediagnostics=yes  diagfile=attmove_diag.fits
+
+  attmove constructs a time-dependent quaternion rotation that maps
+  the instantaneous comet position to the fixed COMET_REF position
+  at each attitude sample.  The C++ implementation decomposes the
+  great-circle shift into axis-angle form and applies it to the
+  spacecraft quaternion.
+
+Sub-step 2 — odfingest
+  Re-ingest the moved ODF tree (which has the attmove-modified AHF) to
+  produce a new SUM.SAS.  Patch its PATH line to point to the real
+  (non-shortlinked) ODF directory.
+
+Sub-step 3 — write moved_sas_setup.env
+  Exports used by downstream stages:
+    SAS_CCF, SAS_ODF (moved), SAS_ATTITUDE=AHF,
+    MOVED_ODF_DIR, MOVED_AHF_FILE, MOVED_ATTHK_FILE
+
+Sub-step 4 — atthkgen on the moved ODF
+  Critical step.  Generates the comet-frame ATTHK by running atthkgen
+  with SAS_ODF pointing to the moved (re-ingested) ODF.  The moved ODF
+  contains the attmove-transformed AHF, so atthkgen reads that and
+  produces an ATTHK that is consistent with it.
+
+  *** Design note — why not build_moved_atthk.py ***
+  An earlier version used a Python script (scripts/build_moved_atthk.py)
+  that applied the same RA/DEC offsets using astropy's
+  SkyCoord.spherical_offsets_to/by.  That spherical-offset approach
+  disagreed with attmove's C++ quaternion rotation by a median of ~51″
+  (and up to ~65″ at some times).  eexpmap reads the ATTHK while attcalc
+  reads the AHF, so this mismatch caused a ~50″ offset between counts
+  images and exposure maps.  Replacing the Python script with atthkgen
+  on the moved ODF reduced the ATTHK-vs-AHF residual to ~3″ (the
+  residual is from the atthkgen interpolation grid, not from a
+  transformation mismatch).
+
+Sub-step 5 — sky-frame field-source filtering (optional)
+  If SCIENCE_FILTER_FIELD_SOURCES=yes:
+    filter_field_sources.py masks events from detected field sources
+    (using their still-sky coordinates) in the merged-clean event list,
+    producing ${inst}_srcfilt.fits.  This is done *before* attcalc so
+    it operates in sky coordinates where the source positions are known.
+  Mask radius: FIELD_SOURCE_MASK_R_ARCSEC (default 20″).
+
+Sub-step 6 — attcalc into the comet frame
+  For each instrument: copy the (optionally source-filtered) merged-clean
+  event list to ${inst}_comet.fits, then run attcalc:
+    attitudelabel  = ahf
+    refpointlabel  = user
+    nominalra      = COMET_REF_RA
+    nominaldec     = COMET_REF_DEC
+    setpnttouser   = yes
+    imagesize      = ATTCALC_IMAGE_SIZE_DEG (default 0.6°)
+    withatthkset   = yes
+    atthkset       = moved_atthk.dat
+
+  attcalc reads the AHF from the event-list header (which already points
+  at the moved AHF via SAS_ODF) and recalculates X,Y for each event
+  relative to the user-specified reference position.
+
+Sub-step 7 — RA_NOM / DEC_NOM patch
+  attcalc with setpnttouser=yes updates RA_PNT/DEC_PNT but does *not*
+  update RA_NOM/DEC_NOM.  eexpmap uses RA_NOM internally for the
+  detector-to-sky transformation.  A mismatch between RA_NOM and the
+  actual pointing causes the exposure map grid to be offset from the
+  counts image.  The pipeline patches RA_NOM=DEC_NOM=COMET_REF in all
+  HDU headers of the comet event list.
+
+
+==============================================================================
+  7.  CONTAM — Contamination and Trail Masking
+==============================================================================
+
+SAS tools:  (none — pure Python)
+Helpers:    scripts/build_contamination_products.py
+            scripts/trail_mask_tools.py
+
+Purpose:  Determine when (and where) detected field sources contaminate
+          the source and background apertures, and optionally build a 2-D
+          spatial trail mask for comet-frame imaging.
+
+Contamination GTIs
+------------------
+build_contamination_products.py samples the comet track at
+CONTAM_SAMPLE_STEP_S (default 5 s) intervals and, at each sample, tests
+whether any field source falls within the source circle or background
+annulus/circle.
+
+Outputs four GTI files reflecting different veto policies:
+  gti_full.fits   — no contamination vetoes (full good time)
+  gti_src.fits    — veto times when a source contaminates the source aperture
+  gti_bkg.fits    — veto times when a source contaminates the background region
+  gti_strict.fits — veto times when either aperture is contaminated
+
+The active policy is selected by SCIENCE_GTI_POLICY (default "full").
+The chosen GTI is symlinked as science_gti.fits.
+
+Aperture geometry:
+  Source:     circle at (SRC_DX, SRC_DY) with radius SRC_R_ARCSEC
+  Background: annulus at (BKG_DX, BKG_DY) with inner BKG_RIN, outer BKG_ROUT
+              or circle at (BKG_DX, BKG_DY) with radius BKG_R_ARCSEC
+              (set by BKG_MODE=annulus|circle)
+
+Trail masking
+-------------
+If SCIENCE_FILTER_FIELD_SOURCES=yes (sky-frame filtering), the comet-frame
+trail mask is skipped because field sources have already been excised
+from the event list.
+
+Otherwise, if SCIENCE_APPLY_TRAIL_MASK=yes:
+  trail_mask_tools.py make
+    Builds a 2-D mask in comet-frame pixel coordinates showing where
+    stationary field sources sweep through the moving image plane.
+    Mask radius: IMAGE_MASK_RADIUS_ARCSEC (default 20″).
+  trail_mask_tools.py apply
+    Filters events falling inside the mask from the comet event list,
+    writing ${inst}_science_base.fits.
+
+A contam/science_selection.env records the active GTI path, policy, and
+mask state for documentation.
+
+
+==============================================================================
+  8.  IMAGE
+==============================================================================
+
+SAS tools:  evselect, eexpmap
+Helpers:    scripts/combine_epic_images.py
+            scripts/image_postproc.py
+
+Purpose:  Create sky-subtracted count-rate images in the comet frame, one
+          set per energy band.
+
+Image grid:
+  xmm_event_geometry.py image-grid builds a common pixel grid using the
+  median event position as center.
+    IMAGE_RADIUS_ARCSEC (default 900″)
+    IMAGE_BIN_ARCSEC    (default 2.0″)
+
+Energy bands:
+  IMAGE_BANDS (default "soft:200:1000;broad:300:2000;hard:1000:12000")
+  Each entry is label:PI_MIN:PI_MAX; bands are processed independently.
+
+Per-instrument, per-band:
+  1. evselect  — extract counts image:
+       xcolumn=X ycolumn=Y imagebinning=binSize
+       xi/yimagebinsize = BIN_PHYS (from the grid)
+       xi/yimagemin/max = X/Y_MIN/MAX_PHYS
+       expression = "PI in [pimin:pimax]"
+
+  2. eexpmap  — generate the exposure map:
+       imageset    = <counts image>
+       attitudeset = moved_atthk.dat
+       eventset    = <comet event list>
+       pimin/pimax = <band limits>
+       attrebin    = SCIENCE_EEXPMAP_ATTREBIN (default 4.0)
+
+     eexpmap reads RA_NOM/DEC_NOM from the counts image header to set
+     its sky projection.  The RA_NOM patch in the comet stage ensures
+     this matches the comet reference position.  attitudeset points to
+     the moved ATTHK generated by atthkgen (not the Python-built one).
+
+Combining:
+  combine_epic_images.py sums counts and exposure images across PN/M1/M2:
+    EPIC_counts.fits, EPIC_exp.fits, EPIC_rate.fits.
+  If trail masking is active (and sky-frame filtering is off), it also
+  produces EPIC_trail_mask.fits and EPIC_rate_masked.fits.
+
+Post-processing (if IMAGE_WRITE_NET_PRODUCTS=yes):
+  image_postproc.py science:
+    Smooths the combined exposure map with a Gaussian
+    (sigma = IMAGE_BKG_SMOOTH_SIGMA_PX, default 20 px), divides counts
+    by smoothed exposure for a background-subtracted rate image, and
+    writes EPIC_clean_summary.json.
+
+
+==============================================================================
+  9.  LCURVE — Light Curves
+==============================================================================
+
+SAS tools:  evselect, epiclccorr, elcbuild
+Helpers:    scripts/combine_epic_lightcurves.py
+
+Purpose:  Generate background-subtracted, corrected EPIC light curves.
+
+Procedure per instrument:
+  1. evselect — filter the analysis event list (from contam stage) with
+     the science GTI and the light-curve PI band:
+       expression="GTI(science_gti.fits,TIME)&&(PI in [LC_PI_MIN:LC_PI_MAX])"
+     Defaults: 300–2000 eV.
+
+  2. Build source and background region expressions using
+     xmm_event_geometry.py (converts arcsec offsets to physical pixel
+     expressions).
+
+  3. evselect — extract raw source and background rate sets:
+       withrateset=yes  maketimecolumn=yes makeratecolumn=yes
+       timebinsize = LC_BIN_S (default 500 s)
+
+  4. epiclccorr — correct for vignetting, PSF, dead time:
+       applyabsolutecorrections = LC_APPLY_ABSOLUTE_CORRECTIONS (default no)
+       sourcecoords=pos  sourcex/y from the region build
+       detxbins = LC_DETXBINS (default 5)
+       detybins = LC_DETYBINS (default 5)
+
+     Fallback logic:
+       a) If absolute correction succeeds → mode = "abs".
+       b) If it fails with ZeroAreaCorrection / ZeroArfgenArea or
+          wrongArfgenResults, and LC_ALLOW_NOABS_FALLBACK=yes:
+          retry with applyabsolutecorrections=no → mode = "relonly".
+       c) If both fail → use raw source light curve → mode = "raw".
+
+  5. Per-instrument corrected LCs are symlinked as ${inst}_corr.fits.
+
+Combining:
+  If ≥2 instruments produced abs (or relonly) LCs:
+    elcbuild — bundle per-instrument LCs into one FITS file.
+    combine_epic_lightcurves.py — sum the per-instrument rate arrays
+    into EPIC_total_corr_{abs|relonly}_lc.fits and .csv.
+
+  The preferred combined LC is symlinked as EPIC_total_corr_lc.fits.
+
+
+==============================================================================
+  10.  SPECTRUM
+==============================================================================
+
+SAS tools:  evselect, especget, epicspeccombine, specgroup
+Helper:     (none beyond the pipeline itself)
+
+Purpose:  Extract source and background spectra with response matrices,
+          combine across instruments, and group for fitting.
+
+Procedure per instrument:
+  1. evselect — filter the analysis event list with science GTI + flare
+     GTI + PI band:
+       expression="GTI(science_gti.fits,TIME)&&GTI(flare_gti.fits,TIME)
+                   &&(PI in [SPEC_PI_MIN:SPEC_PI_MAX])"
+     Defaults: 300–5000 eV.
+
+  2. Build source/background region expressions (same geometry as lcurve).
+
+  3. especget
+       extendedsource = yes
+       useodfatt      = SPEC_USE_ODF_ATT (default yes)
+       sourcecoords   = pos   sourcex/y from the region build
+       detxbins       = max(SPEC_DETXBINS, SPEC_MIN_SAFE_DETBINS)
+       detybins       = max(SPEC_DETYBINS, SPEC_MIN_SAFE_DETBINS)
+       withrmfset=no  — lets especget decide whether to generate or
+                         skip the RMF (the RMF name is still passed).
+     Produces: src_spec.fits, bkg_spec.fits, .arf, .rmf per instrument.
+
+Combining (≥2 instruments):
+  epicspeccombine
+    pha / bkg / arf / rmf — lists of per-instrument files
+    allowHEdiff=yes (tolerates minor energy-grid mismatches between
+    PN and MOS RMFs)
+  → EPIC_src_combined.fits, EPIC_bkg_combined.fits, EPIC_rsp_combined.fits
+
+  If epicspeccombine fails (typically mismatched RMF grids), the
+  per-instrument spectra remain available for simultaneous fitting in
+  XSPEC/Sherpa.
+
+Grouping:
+  specgroup
+    mincounts  = SPECGROUP_MINCOUNTS (default 25)
+    oversample = SPECGROUP_OVERSAMPLE (default 3.0)
+  → EPIC_src_combined_grp.fits
+
+
+==============================================================================
+  11.  MERGE
+==============================================================================
+
+SAS tools:  merge, evselect
+Helpers:    scripts/add_instid_column.py
+
+Purpose:  Produce combined EPIC event lists in the comet frame.
+
+Procedure:
+  1. For each instrument, add an INSTID column (1=PN, 2=M1, 3=M2)
+     via add_instid_column.py.
+
+  2. Full comet-frame merge:
+     merge_pairwise_cometref using COMET_REF_RA/DEC and
+     ATTCALC_IMAGE_SIZE_DEG.
+     → EPIC_comet_merged_full.fits
+
+  3. Science-GTI merge:
+     evselect filters each instrument's analysis event list through
+     the science GTI, then these are tagged and merged the same way.
+     → EPIC_comet_merged_sciencegti.fits
+
+  merge_pairwise_cometref passes:
+    withradec=Y  ra=COMET_REF_RA  dec=COMET_REF_DEC
+    imagesize=ATTCALC_IMAGE_SIZE_DEG  columns="INSTID"
+
+
+==============================================================================
+  12.  QC
+==============================================================================
+
+SAS tools:  (none)
+Helpers:    qc/runner.py, qc/checks.py, qc/plot_utils.py, qc/manifest.py,
+            qc/quick_diag.py, qc/utils.py
+
+Purpose:  Generate automated diagnostic plots covering every major stage.
+
+Entry:
+  xmm_comet_run_qc.sh calls qc/runner.py <config.env>.
+  The runner reads the config, locates output products, and drives the
+  individual check/plot modules.
+
+Products:
+  detect_sources.png     — still-sky mosaics with source circles and
+                           comet-track overlay
+  image_<band>.png       — 2×4 panel: counts / exposure / rate / masked rate
+                           (top: EPIC combined; bottom: per-instrument)
+  contam_timeline.png    — contamination GTI timeline per policy
+  clean_gti.png          — per-exposure flare-filtered fraction
+  spotcheck_<band>.png   — per-segment comet-frame images (comet should
+                           be fixed; field sources should trail)
+
+
+==============================================================================
+  A.  CONFIGURATION REFERENCE
+==============================================================================
+
+Below is the full set of environment variables with their default values.
+Omitted variables use the listed default.
+
+---- Paths (required) ----
+WORKDIR                         (no default — required)
+ODFDIR                          (no default — required)
+
+---- Target ----
+TARGET_ID                       (empty — set this or TRACK_INPUT)
+TARGET_ID_TYPE                  smallbody
+TRACK_INPUT                     (empty — set this or TARGET_ID)
+COMET_REF_RA                    (empty — auto from track midpoint)
+COMET_REF_DEC                   (empty — auto from track midpoint)
+ONLY_INSTS                      "PN M1 M2"
+
+---- Workdir shortlink ----
+SHORTLINK_NAME                  (empty — auto-generated if unset)
+SHORTLINK_KEEP                  no
+
+---- Cleaning ----
+CLEAN_PI_MIN                    200
+CLEAN_PI_MAX                    12000
+CLEAN_SKIP_ESPFILT              no
+ESPFILT_RANGESCALE_PN           25.0
+ESPFILT_RANGESCALE_MOS          20.0
+ESPFILT_ALLOWSIGMA              3.0
+
+---- Tracking ----
+TRACK_STEP                      30s
+MAX_SEG_BLUR_ARCSEC             1.0
+SEGMENT_SNAP_S                  0.0
+MIN_SEG_S                       0.0
+
+---- Source detection ----
+SRCDET_PI_MIN                   1000
+SRCDET_PI_MAX                   12000
+SRCDET_BANDS                    (uses SRCDET_PI_MIN:SRCDET_PI_MAX if unset)
+DETECT_MIN_ML                   10.0
+DETECT_EXCLUDE_TRACK_ARCSEC     30.0
+DETECT_DS9_RADIUS_ARCSEC        20.0
+DETECT_QC_BANDS                 "soft:200:1000;hard:1000:12000"
+DETECT_QC_BIN_ARCSEC            6.0
+DETECT_QC_PAD_ARCMIN            2.0
+
+---- Attitude & comet frame ----
+AHF_INPUT                       (empty — auto-detected from ODFDIR)
+PREMERGE_IMAGE_SIZE_DEG         1.5
+ATTMOVE_GRANULARITY             5
+ATTMOVE_MINSTABLE               30
+ATTCALC_IMAGE_SIZE_DEG          0.6
+
+---- Source/background geometry ----
+SRC_DX_ARCSEC                   0.0
+SRC_DY_ARCSEC                   0.0
+SRC_R_ARCSEC                    500.0
+BKG_MODE                        annulus
+BKG_DX_ARCSEC                   0.0
+BKG_DY_ARCSEC                   0.0
+BKG_R_ARCSEC                    550.0
+BKG_RIN_ARCSEC                  500.0
+BKG_ROUT_ARCSEC                 550.0
+
+---- Contamination & masking ----
+FIELD_SOURCE_MASK_R_ARCSEC      20.0
+CONTAM_SAMPLE_STEP_S            5.0
+CONTAM_MIN_GOOD_SPAN_S          0.0
+SCIENCE_GTI_POLICY              full
+SCIENCE_APPLY_TRAIL_MASK        yes
+SCIENCE_FILTER_FIELD_SOURCES    yes
+IMAGE_MASK_RADIUS_ARCSEC        20.0
+
+---- Imaging ----
+IMAGE_BANDS                     "soft:200:1000;broad:300:2000;hard:1000:12000"
+IMAGE_RADIUS_ARCSEC             900.0
+IMAGE_BIN_ARCSEC                2.0
+SCIENCE_EEXPMAP_ATTREBIN        4.0
+EEXPMAP_ATTREBIN                (= SCIENCE_EEXPMAP_ATTREBIN)
+IMAGE_BKG_SMOOTH_SIGMA_PX      20.0
+IMAGE_WRITE_NET_PRODUCTS        yes
+
+---- Light curves ----
+LC_PI_MIN                       300
+LC_PI_MAX                       2000
+LC_BIN_S                        500.0
+LC_DETXBINS                     5
+LC_DETYBINS                     5
+LC_APPLY_ABSOLUTE_CORRECTIONS   no
+LC_ALLOW_NOABS_FALLBACK         yes
+
+---- Spectra ----
+SPEC_PI_MIN                     300
+SPEC_PI_MAX                     5000
+SPEC_DETXBINS                   5
+SPEC_DETYBINS                   5
+SPEC_MIN_SAFE_DETBINS           15
+SPEC_USE_ODF_ATT                yes
+SPECGROUP_MINCOUNTS             25
+SPECGROUP_OVERSAMPLE            3.0
+
+---- QC ----
+QC_COMPARE_HORIZONS             no
+QC_SPOTCHECK_BAND               (empty — uses default)
+QC_EEXPMAP_ATTREBIN             4.0
+
+
+==============================================================================
+  B.  ATTITUDE CHAIN SUMMARY
+==============================================================================
+
+The attitude-handling chain is the most subtle part of the pipeline.
+This section summarises the flow and the consistency constraints.
+
+  Original ODF
+    └─ AHF (*SC*ATS.FIT)                   ← original spacecraft attitude
+    └─ atthkgen → repro/atthk.dat          ← still-sky ATTHK
+
+  attmove
+    └─ AHF → moved AHF                     ← comet-frame attitude (C++ quaternion rotation)
+
+  odfingest on moved ODF
+    └─ new *SUM.SAS pointing at moved AHF
+
+  atthkgen on moved ODF
+    └─ moved_atthk.dat                      ← comet-frame ATTHK (reads moved AHF)
+
+  attcalc (comet stage)
+    reads: moved AHF (via attitudelabel=ahf + SAS_ODF)
+    writes: X,Y in event list relative to COMET_REF
+
+  eexpmap (image stage)
+    reads: moved_atthk.dat (via attitudeset=)
+    reads: RA_NOM/DEC_NOM from counts image header (= COMET_REF)
+
+Both attcalc and eexpmap now trace back to the same attmove output through
+different paths (AHF directly vs AHF → atthkgen → ATTHK), ensuring
+sub-arcsecond consistency between event coordinates and exposure maps.
+
+
+==============================================================================
+  C.  HELPER SCRIPTS
+==============================================================================
+
+scripts/make_comet_track_and_segments.py
+  Queries JPL Horizons (via astroquery) or reads a user-supplied track
+  table.  Outputs comet_track.fits and motion_segments.csv.
+
+scripts/build_moved_atthk.py
+  DEPRECATED.  Applied spherical offsets via astropy SkyCoord; disagreed
+  with attmove by ~51″.  Retained for reference but no longer invoked.
+
+scripts/filter_field_sources.py
+  Masks events from detected source positions using sky-frame coordinates.
+  Reports excised fraction per source in a JSON summary.
+
+scripts/curate_emllist_for_region.py
+  Reads an edetect_stack source list, optionally removes sources near the
+  comet track, and writes a cleaned FITS table + DS9 region file.
+
+scripts/make_still_sky_mosaic.py
+  Bins still-sky events into a comet-track-overlaid mosaic image for QC.
+
+scripts/combine_epic_images.py
+  Sums per-instrument counts and exposure images; computes rate images;
+  optionally applies trail mask.
+
+scripts/combine_epic_lightcurves.py
+  Sums per-instrument corrected light curves into an EPIC-total LC.
+
+scripts/image_postproc.py
+  Background-subtracted rate image from smoothed exposure.
+
+scripts/trail_mask_tools.py
+  Two subcommands: `make` (build 2-D mask) and `apply` (filter events).
+
+scripts/xmm_event_geometry.py
+  Converts arcsec offsets and radii to SAS physical-pixel region
+  expressions; also builds the image grid (image-grid subcommand).
+
+scripts/add_instid_column.py
+  Adds an integer INSTID column to an event list for merged products.
+
+scripts/diagnose_alignment.py
+  Diagnostic: checks centroid alignment between counts and exposure maps.
+
+scripts/compare_ahf_atthk_v4.py
+  Diagnostic: compares AHF attitude vs ATTHK pointing sample by sample.
+
+scripts/verify_atthkgen_consistency.py
+  Diagnostic: verifies atthkgen-produced ATTHK agrees with the AHF.

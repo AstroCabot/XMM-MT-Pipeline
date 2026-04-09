@@ -64,6 +64,7 @@ HELPER_DIR="$SCRIPT_DIR/scripts"
 : "${CONTAM_MIN_GOOD_SPAN_S:=0.0}"
 : "${SCIENCE_GTI_POLICY:=full}"
 : "${SCIENCE_APPLY_TRAIL_MASK:=yes}"
+: "${SCIENCE_FILTER_FIELD_SOURCES:=yes}"
 
 : "${IMAGE_BANDS:=soft:200:1000;broad:300:2000;hard:1000:12000}"
 : "${IMAGE_RADIUS_ARCSEC:=900.0}"
@@ -1059,6 +1060,7 @@ stage_comet() {
   need_cmd attmove
   need_cmd attcalc
   need_cmd odfingest
+  need_cmd atthkgen
   need_cmd python3
   setup_sas_env
   load_attitude
@@ -1073,7 +1075,6 @@ stage_comet() {
 
   local ahf_input="${AHF_INPUT:-$AHF_FILE}"
   [[ -f "$ahf_input" ]] || { echo "AHF/ATS file not found: $ahf_input" >&2; exit 1; }
-  need_file "$ATTHKGEN_FILE"
 
   local relpath
   relpath="$(python3 - "$ODFDIR" "$ahf_input" <<'PY'
@@ -1129,20 +1130,7 @@ PY
     echo "  [skip] odfingest SUM.SAS already exists"
   fi
 
-  # --- sub-step 3: build_moved_atthk.py ---
-  if [[ "$FORCE" == "1" || ! -s "$moved_atthk" ]]; then
-    python3 "$HELPER_DIR/build_moved_atthk.py" \
-      --input-atthk "$ATTHKGEN_FILE" \
-      --track "$WORKDIR/track/comet_track.fits" \
-      --output "$moved_atthk" \
-      --ref-ra "$COMET_REF_RA" \
-      --ref-dec "$COMET_REF_DEC" \
-      --report-json "$WORKDIR/comet/moved_atthk.json"
-  else
-    echo "  [skip] moved_atthk already exists"
-  fi
-
-  # --- sub-step 4: write moved_sas_setup.env ---
+  # --- sub-step 3: write moved_sas_setup.env ---
   if [[ "$FORCE" == "1" || ! -s "$moved_env" ]]; then
     local real_moved_env="${moved_env/$WORKDIR/$REAL_WORKDIR}"
     local real_ccf="${SAS_CCF/$WORKDIR/$REAL_WORKDIR}"
@@ -1169,12 +1157,59 @@ EOF
     export SAS_ODF="$cur_moved_sum"
     sed -i "s|^PATH .*|PATH $REAL_WORKDIR/comet/moved_odf/odf/|" "$cur_moved_sum"
   fi
+
+  # --- sub-step 4: atthkgen on moved ODF ---
+  # Generate ATTHK from the attmove-transformed AHF in the moved ODF.
+  # This ensures eexpmap (which reads this ATTHK) and attcalc (which reads
+  # the AHF via attitudelabel=ahf) use the same attitude source.
+  # Previously used build_moved_atthk.py (Python/astropy spherical offsets),
+  # which disagreed with attmove's C++ transformation by ~50".
+  if [[ "$FORCE" == "1" || ! -s "$moved_atthk" ]]; then
+    ( export SAS_CCF="$SAS_CCF"
+      export SAS_ODF="$SAS_ODF"
+      export SAS_ATTITUDE=AHF
+      atthkgen atthkset="$moved_atthk"
+    )
+  else
+    echo "  [skip] moved_atthk already exists"
+  fi
+
   export MOVED_ATTHK_FILE="$WORKDIR/comet/moved_atthk.dat"
   cp -f "$MOVED_ATTHK_FILE" "$WORKDIR/comet/comet_atthk.fits"
 
+  # --- sub-step 5: sky-frame field-source filtering (before attcalc) ---
+  if bool_yes "$SCIENCE_FILTER_FIELD_SOURCES"; then
+    local srcfilt_srclist="$WORKDIR/detect/field_sources_all.fits"
+    [[ -f "$srcfilt_srclist" ]] || srcfilt_srclist="$WORKDIR/detect/field_sources_curated.fits"
+    if [[ -f "$srcfilt_srclist" ]]; then
+      for inst in $(selected_insts); do
+        local srcfilt_in="$(merged_clean_evt "$inst")"
+        local srcfilt_out="$WORKDIR/clean/${inst}_srcfilt.fits"
+        [[ -f "$srcfilt_in" ]] || continue
+        if [[ "$FORCE" == "1" || ! -s "$srcfilt_out" ]]; then
+          python3 "$HELPER_DIR/filter_field_sources.py" \
+            --event "$srcfilt_in" \
+            --srclist "$srcfilt_srclist" \
+            --mask-radius-arcsec "$FIELD_SOURCE_MASK_R_ARCSEC" \
+            --output "$srcfilt_out" \
+            --report-json "$WORKDIR/clean/${inst}_srcfilt.json"
+        else
+          echo "  [skip] ${inst} source-filtered events already exist"
+        fi
+      done
+    else
+      echo "WARNING: SCIENCE_FILTER_FIELD_SOURCES=yes but no source list found" >&2
+    fi
+  fi
+
   local inst infile outfile
   for inst in $(selected_insts); do
-    infile="$(merged_clean_evt "$inst")"
+    # Prefer source-filtered events when available
+    if bool_yes "$SCIENCE_FILTER_FIELD_SOURCES" && [[ -f "$WORKDIR/clean/${inst}_srcfilt.fits" ]]; then
+      infile="$WORKDIR/clean/${inst}_srcfilt.fits"
+    else
+      infile="$(merged_clean_evt "$inst")"
+    fi
     [[ -f "$infile" ]] || continue
     outfile="$(inst_comet_evt "$inst")"
     if skip_file "$outfile" && [[ "$(fits_rows "$outfile")" -gt 0 ]]; then
@@ -1191,6 +1226,21 @@ EOF
       imagesize="$ATTCALC_IMAGE_SIZE_DEG" \
       withatthkset=yes \
       atthkset="$MOVED_ATTHK_FILE"
+
+    # attcalc setpnttouser=yes updates RA_PNT/DEC_PNT but NOT RA_NOM/DEC_NOM.
+    # eexpmap uses RA_NOM internally for the detector-to-sky transformation,
+    # so a mismatch causes the exposure map to be offset from the counts image.
+    # Fix: overwrite RA_NOM/DEC_NOM to match the comet reference position.
+    python3 -c "
+from astropy.io import fits
+with fits.open('$outfile', mode='update') as hdul:
+    for hdu in hdul:
+        h = hdu.header
+        if 'RA_NOM' in h:
+            h['RA_NOM']  = $COMET_REF_RA
+            h['DEC_NOM'] = $COMET_REF_DEC
+    hdul.flush()
+"
   done
 }
 
@@ -1224,7 +1274,10 @@ stage_contam() {
 
   python3 "$HELPER_DIR/build_contamination_products.py"     --track "$WORKDIR/track/comet_track.fits"     --srclist "$contam_srclist"     --output-dir "$WORKDIR/contam"     --science-policy "$SCIENCE_GTI_POLICY"     --sample-step-s "$CONTAM_SAMPLE_STEP_S"     --mask-radius-arcsec "$FIELD_SOURCE_MASK_R_ARCSEC"     --min-good-span-s "$CONTAM_MIN_GOOD_SPAN_S"     --src-dx-arcsec "$SRC_DX_ARCSEC"     --src-dy-arcsec "$SRC_DY_ARCSEC"     --src-r-arcsec "$SRC_R_ARCSEC"     --summary-json "$WORKDIR/contam/contamination_summary.json"     "${bkg_args[@]}"
 
-  if bool_yes "$SCIENCE_APPLY_TRAIL_MASK"; then
+  if bool_yes "$SCIENCE_FILTER_FIELD_SOURCES"; then
+    echo "  [info] Sky-frame source filtering active; skipping comet-frame trail mask"
+    needs_mask=0
+  elif bool_yes "$SCIENCE_APPLY_TRAIL_MASK"; then
     python3 "$HELPER_DIR/trail_mask_tools.py" make       --grid-json "$WORKDIR/images/grid.json"       --track "$WORKDIR/track/comet_track.fits"       --srclist "$contam_srclist"       --mask-radius-arcsec "$IMAGE_MASK_RADIUS_ARCSEC"       --out-mask "$WORKDIR/contam/EPIC_trail_mask.fits"       --out-json "$WORKDIR/contam/EPIC_trail_mask.json"
     needs_mask=1
   else
@@ -1327,17 +1380,20 @@ stage_image() {
       --out-rate "$banddir/EPIC_rate.fits"
       --out-json "$banddir/EPIC_image_summary.json"
     )
-    local mask_srclist="$WORKDIR/detect/field_sources_all.fits"
-    [[ -f "$mask_srclist" ]] || mask_srclist="$WORKDIR/detect/field_sources_curated.fits"
-    if [[ -f "$mask_srclist" && "$(srclist_rows "$mask_srclist")" -gt 0 ]]; then
-      combine_args+=(
-        --grid-json "$WORKDIR/images/grid.json"
-        --track "$WORKDIR/track/comet_track.fits"
-        --srclist "$mask_srclist"
-        --mask-radius-arcsec "$IMAGE_MASK_RADIUS_ARCSEC"
-        --out-mask "$banddir/EPIC_trail_mask.fits"
-        --out-rate-masked "$banddir/EPIC_rate_masked.fits"
-      )
+    # Only build comet-frame trail mask if sky-frame source filtering is OFF
+    if ! bool_yes "$SCIENCE_FILTER_FIELD_SOURCES"; then
+      local mask_srclist="$WORKDIR/detect/field_sources_all.fits"
+      [[ -f "$mask_srclist" ]] || mask_srclist="$WORKDIR/detect/field_sources_curated.fits"
+      if [[ -f "$mask_srclist" && "$(srclist_rows "$mask_srclist")" -gt 0 ]]; then
+        combine_args+=(
+          --grid-json "$WORKDIR/images/grid.json"
+          --track "$WORKDIR/track/comet_track.fits"
+          --srclist "$mask_srclist"
+          --mask-radius-arcsec "$IMAGE_MASK_RADIUS_ARCSEC"
+          --out-mask "$banddir/EPIC_trail_mask.fits"
+          --out-rate-masked "$banddir/EPIC_rate_masked.fits"
+        )
+      fi
     fi
     python3 "$HELPER_DIR/combine_epic_images.py" "${combine_args[@]}"
     if bool_yes "$IMAGE_WRITE_NET_PRODUCTS"; then
