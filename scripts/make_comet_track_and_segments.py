@@ -162,8 +162,8 @@ def _build_epoch_list(start_utc: str, stop_utc: str, step_seconds: float) -> np.
 
 def _parse_eph_table(eph) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     cols = eph.colnames
-    racol = _find_col_case_insensitive(cols, ["RA_app", "RA_ICRF_app", "RA"])
-    deccol = _find_col_case_insensitive(cols, ["DEC_app", "DEC_ICRF_app", "DEC"])
+    racol = _find_col_case_insensitive(cols, ["RA", "RA_ICRF", "RA_app", "RA_ICRF_app"])
+    deccol = _find_col_case_insensitive(cols, ["DEC", "DEC_ICRF", "DEC_app", "DEC_ICRF_app"])
     dcol = _find_col_case_insensitive(cols, ["delta"])
     tcol = _find_col_case_insensitive(cols, ["datetime_jd", "JD", "jd"])
     if not (racol and deccol and dcol and tcol):
@@ -187,7 +187,7 @@ def _query_horizons_epoch_chunk(
         location="500@399",
         epochs=[float(x) for x in epoch_chunk_jd],
     )
-    eph = obj.ephemerides(quantities="2,20", extra_precision=True)
+    eph = obj.ephemerides(quantities="1,20", extra_precision=True)
     return _parse_eph_table(eph)
 
 

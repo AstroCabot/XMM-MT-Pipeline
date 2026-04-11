@@ -1408,13 +1408,11 @@ stage_image() {
 stage_lcurve() {
   need_cmd evselect
   need_cmd epiclccorr
-  need_cmd elcbuild
   need_cmd python3
   setup_sas_env
   need_file "$WORKDIR/contam/science_gti.fits"
 
   mkdir -p "$WORKDIR/lcurve"
-  local -a abs_lcs=() rel_lcs=()
   local inst evt lc_evt src_raw bkg_raw corr_abs corr_rel mode_txt chosen mode status
   local summary_tsv="$WORKDIR/lcurve/lc_summary.tsv"
   printf 'inst\tmode\tfile\n' > "$summary_tsv"
@@ -1539,73 +1537,14 @@ stage_lcurve() {
     [[ -n "$chosen" && -s "$chosen" ]] || continue
     ln -sfn "$(basename "$chosen")" "$WORKDIR/lcurve/${inst}_corr.fits"
     printf '%s\t%s\t%s\n' "$inst" "$mode" "$chosen" >> "$summary_tsv"
-    if [[ "$mode" == "abs" ]]; then
-      abs_lcs+=("$chosen")
-    elif [[ "$mode" == "relonly" ]]; then
-      rel_lcs+=("$chosen")
-    fi
   done
-
-  local preferred_combined=""
-  local preferred_mode=""
-  if [[ ${#abs_lcs[@]} -ge 1 ]]; then
-    if [[ ${#abs_lcs[@]} -ge 2 ]]; then
-      local sets_csv_abs
-      sets_csv_abs="$(IFS=,; echo "${abs_lcs[*]}")"
-      if [[ "$FORCE" == "1" || ! -s "$WORKDIR/lcurve/EPIC_bundle_lc_abs.fits" ]]; then
-        elcbuild sets="$sets_csv_abs" outset="$WORKDIR/lcurve/EPIC_bundle_lc_abs.fits" || echo "WARNING: elcbuild (abs) failed; skipping bundle" >&2
-      fi
-    fi
-    if python3 "$HELPER_DIR/combine_epic_lightcurves.py" \
-      --inputs "${abs_lcs[@]}" \
-      --out-fits "$WORKDIR/lcurve/EPIC_total_corr_abs_lc.fits" \
-      --out-csv "$WORKDIR/lcurve/EPIC_total_corr_abs_lc.csv"; then
-      preferred_combined="$WORKDIR/lcurve/EPIC_total_corr_abs_lc.fits"
-      preferred_mode="abs"
-    else
-      echo "WARNING: combine_epic_lightcurves.py (abs) failed; per-instrument LCs still available" >&2
-    fi
-  fi
-
-  if [[ ${#rel_lcs[@]} -ge 1 ]]; then
-    if [[ ${#rel_lcs[@]} -ge 2 ]]; then
-      local sets_csv_rel
-      sets_csv_rel="$(IFS=,; echo "${rel_lcs[*]}")"
-      if [[ "$FORCE" == "1" || ! -s "$WORKDIR/lcurve/EPIC_bundle_lc_relonly.fits" ]]; then
-        elcbuild sets="$sets_csv_rel" outset="$WORKDIR/lcurve/EPIC_bundle_lc_relonly.fits" || echo "WARNING: elcbuild (rel) failed; skipping bundle" >&2
-      fi
-    fi
-    if python3 "$HELPER_DIR/combine_epic_lightcurves.py" \
-      --inputs "${rel_lcs[@]}" \
-      --out-fits "$WORKDIR/lcurve/EPIC_total_corr_relonly_lc.fits" \
-      --out-csv "$WORKDIR/lcurve/EPIC_total_corr_relonly_lc.csv"; then
-      if [[ -z "$preferred_combined" ]]; then
-        preferred_combined="$WORKDIR/lcurve/EPIC_total_corr_relonly_lc.fits"
-        preferred_mode="relonly"
-      fi
-    else
-      echo "WARNING: combine_epic_lightcurves.py (rel) failed; per-instrument LCs still available" >&2
-    fi
-  fi
-
-  if [[ -n "$preferred_combined" && -s "$preferred_combined" ]]; then
-    ln -sfn "$(basename "$preferred_combined")" "$WORKDIR/lcurve/EPIC_total_corr_lc.fits"
-    if [[ "$preferred_combined" == *.fits ]]; then
-      local csv_pref="${preferred_combined%.fits}.csv"
-      if [[ -f "$csv_pref" ]]; then
-        ln -sfn "$(basename "$csv_pref")" "$WORKDIR/lcurve/EPIC_total_corr_lc.csv"
-      fi
-    fi
-    printf 'mode=%s\nfile=%s\n' "$preferred_mode" "$preferred_combined" > "$WORKDIR/lcurve/EPIC_total_corr_mode.txt"
-  else
-    echo "WARNING: No combined light curve produced; per-instrument raw LCs are in $WORKDIR/lcurve/" >&2
-  fi
+  # Per-instrument light curves are the final products.
+  # No cross-instrument combining is performed.
 }
 
 stage_spectrum() {
   need_cmd evselect
   need_cmd especget
-  need_cmd epicspeccombine
   need_cmd specgroup
   need_cmd python3
   setup_sas_env
@@ -1673,46 +1612,30 @@ stage_spectrum() {
     bkgspecs+=("$bkgspec")
     arfs+=("$arf")
     rmfs+=("$rmf")
+
+    # Group per-instrument spectrum
+    if [[ -s "$srcspec" && -s "$bkgspec" && -s "$rmf" ]]; then
+      local grp="$WORKDIR/spectra/${inst}_src_spec_grp.fits"
+      if [[ "$FORCE" == "1" || ! -s "$grp" ]]; then
+        specgroup \
+          spectrumset="$srcspec" \
+          groupedset="$grp" \
+          backgndset="$bkgspec" \
+          rmfset="$rmf" \
+          arfset="$arf" \
+          mincounts="$SPECGROUP_MINCOUNTS" \
+          oversample="$SPECGROUP_OVERSAMPLE" \
+          addfilenames=yes
+      fi
+    fi
   done
 
-  if [[ ${#srcspecs[@]} -ge 2 ]]; then
-    if epicspeccombine \
-      pha="$(printf '%s ' "${srcspecs[@]}")" \
-      bkg="$(printf '%s ' "${bkgspecs[@]}")" \
-      arf="$(printf '%s ' "${arfs[@]}")" \
-      rmf="$(printf '%s ' "${rmfs[@]}")" \
-      filepha="$WORKDIR/spectra/EPIC_src_combined.fits" \
-      filebkg="$WORKDIR/spectra/EPIC_bkg_combined.fits" \
-      filersp="$WORKDIR/spectra/EPIC_rsp_combined.fits" \
-      allowHEdiff=yes; then
-      specgroup \
-        spectrumset="$WORKDIR/spectra/EPIC_src_combined.fits" \
-        groupedset="$WORKDIR/spectra/EPIC_src_combined_grp.fits" \
-        backgndset="$WORKDIR/spectra/EPIC_bkg_combined.fits" \
-        rmfset="$WORKDIR/spectra/EPIC_rsp_combined.fits" \
-        mincounts="$SPECGROUP_MINCOUNTS" \
-        oversample="$SPECGROUP_OVERSAMPLE" \
-        addfilenames=yes
-    else
-      echo "WARNING: epicspeccombine failed (likely mismatched RMF energy grids); per-instrument spectra still available for simultaneous fitting" >&2
-    fi
-  elif [[ ${#srcspecs[@]} -eq 1 ]]; then
-    cp -f "${srcspecs[0]}" "$WORKDIR/spectra/EPIC_src_combined.fits"
-    cp -f "${bkgspecs[0]}" "$WORKDIR/spectra/EPIC_bkg_combined.fits"
-    cp -f "${rmfs[0]}" "$WORKDIR/spectra/EPIC_rsp_combined.fits"
-    specgroup \
-      spectrumset="$WORKDIR/spectra/EPIC_src_combined.fits" \
-      groupedset="$WORKDIR/spectra/EPIC_src_combined_grp.fits" \
-      backgndset="$WORKDIR/spectra/EPIC_bkg_combined.fits" \
-      rmfset="$WORKDIR/spectra/EPIC_rsp_combined.fits" \
-      arfset="${arfs[0]}" \
-      mincounts="$SPECGROUP_MINCOUNTS" \
-      oversample="$SPECGROUP_OVERSAMPLE" \
-      addfilenames=yes
-  else
+  if [[ ${#srcspecs[@]} -eq 0 ]]; then
     echo "No spectra were produced." >&2
     exit 1
   fi
+  # Per-instrument spectra are the final products.
+  # No cross-instrument combining is performed.
 }
 
 prepare_instid_event() {
@@ -1723,7 +1646,6 @@ prepare_instid_event() {
 }
 
 stage_merge() {
-  need_cmd merge
   need_cmd python3
   need_cmd evselect
   setup_sas_env
@@ -1731,7 +1653,6 @@ stage_merge() {
   mkdir -p "$WORKDIR/final"
 
   local inst evt base_evt scievt tagged
-  local -a full_files=() sci_files=()
   for inst in $(selected_insts); do
     evt="$(inst_comet_evt "$inst")"
     [[ -f "$evt" ]] || continue
@@ -1740,7 +1661,6 @@ stage_merge() {
     if [[ "$FORCE" == "1" || ! -s "$tagged" ]]; then
       prepare_instid_event "$inst" "$evt" "$tagged"
     fi
-    full_files+=("$tagged")
 
     base_evt="$(inst_analysis_evt "$inst")"
     [[ -f "$base_evt" ]] || continue
@@ -1756,16 +1676,10 @@ stage_merge() {
       if [[ "$FORCE" == "1" || ! -s "$tagged" ]]; then
         prepare_instid_event "$inst" "$scievt" "$tagged"
       fi
-      sci_files+=("$tagged")
     fi
   done
-
-  if [[ ${#full_files[@]} -ge 1 ]]; then
-    merge_pairwise_cometref "$WORKDIR/final/EPIC_comet_merged_full.fits" "${full_files[@]}"
-  fi
-  if [[ ${#sci_files[@]} -ge 1 ]]; then
-    merge_pairwise_cometref "$WORKDIR/final/EPIC_comet_merged_sciencegti.fits" "${sci_files[@]}"
-  fi
+  # Per-instrument tagged event lists are the final products.
+  # No cross-instrument merging is performed.
 }
 
 stage_qc() {

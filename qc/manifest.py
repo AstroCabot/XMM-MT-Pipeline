@@ -16,6 +16,7 @@ from pathlib import Path
 import sys
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -42,6 +43,7 @@ def stage_status(ok: bool, warn: bool = False) -> str:
 # ------------------------------------------------------------------
 # manifest subcommand
 # ------------------------------------------------------------------
+
 
 def cmd_manifest(args: argparse.Namespace) -> int:
     env = load_shell_env(args.config)
@@ -176,31 +178,30 @@ def cmd_manifest(args: argparse.Namespace) -> int:
     stages["image"] = {"status": stage_status(image_ok), "bands": image_products}
 
     # --- lcurve ---
-    mode_file = workdir / "lcurve" / "EPIC_total_corr_mode.txt"
-    combined_mode = None
-    if mode_file.exists():
-        for line in mode_file.read_text(encoding="utf-8").splitlines():
-            if line.startswith("mode="):
-                combined_mode = line.split("=", 1)[1].strip()
-    req_abs = env.get("LC_APPLY_ABSOLUTE_CORRECTIONS", "no").strip().lower() in {
-        "1", "y", "yes", "true",
-    }
-    lcurve_warn = combined_mode == "raw" or (req_abs and combined_mode not in {"abs"})
+    lcurve_ok = False
+    lcurve_warn = False
+    for inst in ("PN", "M1", "M2"):
+        for suffix in ("_corr_abs.fits", "_corr_relonly.fits", "_corr.fits"):
+            if nonempty(workdir / "lcurve" / f"{inst}{suffix}"):
+                lcurve_ok = True
+                break
     stages["lcurve"] = {
-        "status": stage_status(
-            nonempty(workdir / "lcurve" / "EPIC_total_corr_lc.fits"), warn=lcurve_warn
-        ),
-        "combined_mode": combined_mode,
+        "status": stage_status(lcurve_ok, warn=lcurve_warn),
     }
 
     # --- spectrum ---
-    spec_ok = nonempty(workdir / "spectra" / "EPIC_src_combined.fits") or nonempty(
-        workdir / "spectra" / "EPIC_src_combined_grp.fits"
+    spec_ok = any(
+        nonempty(workdir / "spectra" / f"{inst}_src_spec.fits")
+        or nonempty(workdir / "spectra" / f"{inst}_src_spec_grp.fits")
+        for inst in ("PN", "M1", "M2")
     )
     stages["spectrum"] = {"status": stage_status(spec_ok)}
 
     # --- merge ---
-    merge_ok = nonempty(workdir / "final" / "EPIC_comet_merged_sciencegti.fits")
+    merge_ok = any(
+        nonempty(workdir / "final" / f"{inst}_full_instid.fits")
+        for inst in ("PN", "M1", "M2")
+    )
     stages["merge"] = {"status": stage_status(merge_ok)}
 
     # ---- Write JSON manifest ----
@@ -219,8 +220,17 @@ def cmd_manifest(args: argparse.Namespace) -> int:
         "|---|---|---|",
     ]
     for name in [
-        "init", "repro", "clean", "track", "detect", "comet",
-        "contam", "image", "lcurve", "spectrum", "merge",
+        "init",
+        "repro",
+        "clean",
+        "track",
+        "detect",
+        "comet",
+        "contam",
+        "image",
+        "lcurve",
+        "spectrum",
+        "merge",
     ]:
         st = stages[name]
         status = str(st.get("status", "missing"))
@@ -247,20 +257,28 @@ def cmd_manifest(args: argparse.Namespace) -> int:
         else:
             key = "outputs present" if status != "missing" else "missing"
         md_lines.append(f"| {name} | {status} | {key} |")
-    (outdir / "manifest.md").write_text(
-        "\n".join(md_lines) + "\n", encoding="utf-8"
-    )
+    (outdir / "manifest.md").write_text("\n".join(md_lines) + "\n", encoding="utf-8")
 
     # ---- Write PNG summary ----
     labels = [
-        "PN raw", "M1 raw", "M2 raw",
-        "PN clean", "M1 clean", "M2 clean",
-        "pseudoexp", "curated src",
+        "PN raw",
+        "M1 raw",
+        "M2 raw",
+        "PN clean",
+        "M1 clean",
+        "M2 clean",
+        "pseudoexp",
+        "curated src",
     ]
     values = [
-        raw_counts[0], raw_counts[1], raw_counts[2],
-        clean_counts[0], clean_counts[1], clean_counts[2],
-        len(pseudoexps), int(curated_rows or 0),
+        raw_counts[0],
+        raw_counts[1],
+        raw_counts[2],
+        clean_counts[0],
+        clean_counts[1],
+        clean_counts[2],
+        len(pseudoexps),
+        int(curated_rows or 0),
     ]
 
     fig, ax = plt.subplots(figsize=(10.5, 4.6), constrained_layout=True)
@@ -272,8 +290,12 @@ def cmd_manifest(args: argparse.Namespace) -> int:
     ax.set_title("Pipeline manifest overview")
     for i, v in enumerate(values):
         ax.text(
-            i, v + max(values + [1]) * 0.02,
-            str(v), ha="center", va="bottom", fontsize=8,
+            i,
+            v + max(values + [1]) * 0.02,
+            str(v),
+            ha="center",
+            va="bottom",
+            fontsize=8,
         )
     txt = [
         f"lcurve mode : {combined_mode or 'n/a'}",
@@ -283,9 +305,14 @@ def cmd_manifest(args: argparse.Namespace) -> int:
         f"M2={clean_data['M2']['merged_rows']}",
     ]
     ax.text(
-        0.99, 0.98, "\n".join(txt),
-        transform=ax.transAxes, ha="right", va="top",
-        fontsize=8, family="monospace",
+        0.99,
+        0.98,
+        "\n".join(txt),
+        transform=ax.transAxes,
+        ha="right",
+        va="top",
+        fontsize=8,
+        family="monospace",
         bbox=dict(boxstyle="round", facecolor="white", alpha=0.7, edgecolor="none"),
     )
     qpu.savefig(fig, outdir / "manifest.png")
@@ -299,15 +326,15 @@ def cmd_manifest(args: argparse.Namespace) -> int:
 
 # Map from check keys → new semantic filenames used in the qc/ directory.
 _ARTIFACT_MAP = {
-    "init":     ["manifest.md"],
-    "repro":    ["manifest.md", "manifest.png"],
-    "clean":    ["clean_gti.png", "manifest.md", "manifest.png"],
-    "track":    ["track_ephemeris.png", "qc_report.md"],
-    "detect":   ["detect_sources.png", "manifest.md"],
-    "contam":   ["contam_timeline.png", "qc_report.md"],
-    "lcurve":   ["lcurve.png", "region_support_PN.json", "qc_report.md"],
+    "init": ["manifest.md"],
+    "repro": ["manifest.md", "manifest.png"],
+    "clean": ["clean_gti.png", "manifest.md", "manifest.png"],
+    "track": ["track_ephemeris.png", "qc_report.md"],
+    "detect": ["detect_sources.png", "manifest.md"],
+    "contam": ["contam_timeline.png", "qc_report.md"],
+    "lcurve": ["lcurve.png", "region_support_PN.json", "qc_report.md"],
     "spectrum": ["spectrum.png", "qc_report.md"],
-    "merge":    ["manifest.md"],
+    "merge": ["manifest.md"],
 }
 
 
@@ -351,8 +378,17 @@ def cmd_index(args: argparse.Namespace) -> int:
     ]
 
     for stage in [
-        "init", "repro", "clean", "track", "detect", "comet",
-        "contam", "image", "lcurve", "spectrum", "merge",
+        "init",
+        "repro",
+        "clean",
+        "track",
+        "detect",
+        "comet",
+        "contam",
+        "image",
+        "lcurve",
+        "spectrum",
+        "merge",
     ]:
         status = str(stages.get(stage, {}).get("status", "missing"))
         arts = ", ".join(f"`{a}`" for a in artifact_map.get(stage, []))
@@ -430,6 +466,7 @@ def cmd_index(args: argparse.Namespace) -> int:
 # repro subcommand
 # ------------------------------------------------------------------
 
+
 def _find_candidates(repro: Path, patterns: list[str]) -> list[str]:
     out: list[str] = []
     for patt in patterns:
@@ -448,18 +485,33 @@ def cmd_repro(args: argparse.Namespace) -> int:
     workdir = Path(env["WORKDIR"])
     repro = workdir / "repro"
     data = {
-        "PN": _find_candidates(repro, [
-            "*EPN*ImagingEvts.ds", "*EPN*ImagingEvts*.FIT*",
-            "*PIEVLI*.FIT*", "*EPN*EVLI*.FIT*",
-        ]),
-        "M1": _find_candidates(repro, [
-            "*EMOS1*ImagingEvts.ds", "*EMOS1*ImagingEvts*.FIT*",
-            "*M1EVLI*.FIT*", "*EMOS1*EVLI*.FIT*",
-        ]),
-        "M2": _find_candidates(repro, [
-            "*EMOS2*ImagingEvts.ds", "*EMOS2*ImagingEvts*.FIT*",
-            "*M2EVLI*.FIT*", "*EMOS2*EVLI*.FIT*",
-        ]),
+        "PN": _find_candidates(
+            repro,
+            [
+                "*EPN*ImagingEvts.ds",
+                "*EPN*ImagingEvts*.FIT*",
+                "*PIEVLI*.FIT*",
+                "*EPN*EVLI*.FIT*",
+            ],
+        ),
+        "M1": _find_candidates(
+            repro,
+            [
+                "*EMOS1*ImagingEvts.ds",
+                "*EMOS1*ImagingEvts*.FIT*",
+                "*M1EVLI*.FIT*",
+                "*EMOS1*EVLI*.FIT*",
+            ],
+        ),
+        "M2": _find_candidates(
+            repro,
+            [
+                "*EMOS2*ImagingEvts.ds",
+                "*EMOS2*ImagingEvts*.FIT*",
+                "*M2EVLI*.FIT*",
+                "*EMOS2*EVLI*.FIT*",
+            ],
+        ),
     }
     print(
         json.dumps(
@@ -473,6 +525,7 @@ def cmd_repro(args: argparse.Namespace) -> int:
 # helpers
 # ------------------------------------------------------------------
 
+
 def _load_json(path: Path) -> dict:
     if not path.exists():
         return {}
@@ -483,6 +536,7 @@ def _load_json(path: Path) -> dict:
 # CLI
 # ------------------------------------------------------------------
 
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Manifest, QC index, and repro diagnostics for the XMM comet package."
@@ -490,7 +544,9 @@ def main() -> int:
     sub = ap.add_subparsers(dest="command")
     sub.required = True
 
-    p_manifest = sub.add_parser("manifest", help="Write stage-level manifest JSON/MD/PNG")
+    p_manifest = sub.add_parser(
+        "manifest", help="Write stage-level manifest JSON/MD/PNG"
+    )
     p_manifest.add_argument("--config", required=True)
     p_manifest.add_argument("--outdir", required=True)
 
@@ -498,7 +554,9 @@ def main() -> int:
     p_index.add_argument("--config", required=True)
     p_index.add_argument("--outdir", required=True)
 
-    p_repro = sub.add_parser("repro", help="Report per-instrument calibrated event-list candidates")
+    p_repro = sub.add_parser(
+        "repro", help="Report per-instrument calibrated event-list candidates"
+    )
     p_repro.add_argument("--config", required=True)
 
     args = ap.parse_args()

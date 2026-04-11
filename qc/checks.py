@@ -319,7 +319,9 @@ def savefig(fig: plt.Figure, path: str, tight_kw: dict | None = None) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     # Skip tight_layout when the figure uses constrained_layout (incompatible).
     engine = fig.get_layout_engine()
-    uses_constrained = engine is not None and type(engine).__name__ == "ConstrainedLayoutEngine"
+    uses_constrained = (
+        engine is not None and type(engine).__name__ == "ConstrainedLayoutEngine"
+    )
     if not uses_constrained:
         fig.tight_layout(**tight_kw or {})
     fig.savefig(path, dpi=180, bbox_inches="tight", pad_inches=0.25)
@@ -1147,7 +1149,9 @@ def check_exposures(env: dict[str, str], outdir: Path) -> dict[str, Any]:
     n_ql_rows = max(0, (n_ql + 3) // 4)
     n_rows = 2 + n_ql_rows
     fig_height = 4.5 * n_rows
-    fig, axes = plt.subplots(n_rows, 4, figsize=(18.0, fig_height), constrained_layout=True)
+    fig, axes = plt.subplots(
+        n_rows, 4, figsize=(18.0, fig_height), constrained_layout=True
+    )
     if n_rows == 1:
         axes = axes[np.newaxis, :]
     ax_tl = fig.add_subplot(n_rows, 2, 1)
@@ -1175,8 +1179,12 @@ def check_exposures(env: dict[str, str], outdir: Path) -> dict[str, Any]:
         ccd_status.append(e.get("status", "?"))
     y_pos = np.arange(len(ccd_labels))
     bars = ax_tl.barh(
-        y_pos, ccd_ontime,
-        color=ccd_colors, alpha=0.8, edgecolor="black", linewidth=0.5,
+        y_pos,
+        ccd_ontime,
+        color=ccd_colors,
+        alpha=0.8,
+        edgecolor="black",
+        linewidth=0.5,
     )
     # Hatch skipped entries
     for i, (bar, st) in enumerate(zip(bars, ccd_status)):
@@ -1456,7 +1464,10 @@ def check_detect(env: dict[str, str], outdir: Path) -> dict[str, Any]:
         else None
     )
     fig, axes = plt.subplots(
-        1, len(entries), figsize=(6.0 * len(entries), 5.2), squeeze=False,
+        1,
+        len(entries),
+        figsize=(6.0 * len(entries), 5.2),
+        squeeze=False,
         constrained_layout=True,
     )
     axes = axes[0]
@@ -1733,8 +1744,11 @@ def check_image(
                 else:
                     vmin, vmax = (0.0, 1.0)
                 from matplotlib.colors import PowerNorm
+
                 im = ax.imshow(
-                    data, origin="lower", extent=extent,
+                    data,
+                    origin="lower",
+                    extent=extent,
                     norm=PowerNorm(gamma=0.5, vmin=vmin, vmax=vmax),
                 )
             elif stretch == "symlog":
@@ -1746,8 +1760,12 @@ def check_image(
                 else:
                     absmax = 1.0
                 im = ax.imshow(
-                    data, origin="lower", extent=extent,
-                    vmin=-absmax, vmax=absmax, cmap="RdBu_r",
+                    data,
+                    origin="lower",
+                    extent=extent,
+                    vmin=-absmax,
+                    vmax=absmax,
+                    cmap="RdBu_r",
                 )
             elif stretch == "linear":
                 finite = np.isfinite(data)
@@ -1811,8 +1829,12 @@ def check_image(
                 else:
                     absmax = 1.0
                 im = ax.imshow(
-                    inst_rate, origin="lower", extent=extent,
-                    vmin=-absmax, vmax=absmax, cmap="RdBu_r",
+                    inst_rate,
+                    origin="lower",
+                    extent=extent,
+                    vmin=-absmax,
+                    vmax=absmax,
+                    cmap="RdBu_r",
                 )
             else:
                 if np.any(finite):
@@ -1921,7 +1943,9 @@ def check_contam(env: dict[str, str], outdir: Path) -> dict[str, Any]:
     times = timeline["time_s"]
     t_ks = (times - times[0]) / 1000.0
     trk_ra, trk_dec = _interp_track_to_times(track, times)
-    fig, axes = plt.subplots(3, 1, figsize=(10.5, 8.5), sharex=True, constrained_layout=True)
+    fig, axes = plt.subplots(
+        3, 1, figsize=(10.5, 8.5), sharex=True, constrained_layout=True
+    )
     ax = axes[0]
     src_r = env_float(env, "SRC_R_ARCSEC", 60.0)
     mask_r = env_float(env, "FIELD_SOURCE_MASK_R_ARCSEC", 20.0)
@@ -2008,20 +2032,11 @@ def check_lcurve(env: dict[str, str], outdir: Path) -> dict[str, Any]:
             paths[name] = path
             modes[name] = mode
             lcs.append(read_lightcurve(str(path), name))
-    combined = None
-    combined_mode = None
-    for path, mode in [
-        (workdir / "EPIC_total_corr_abs_lc.fits", "abs"),
-        (workdir / "EPIC_total_corr_relonly_lc.fits", "relonly"),
-        (workdir / "EPIC_total_corr_lc.fits", "legacy"),
-    ]:
-        if path.exists():
-            combined = read_lightcurve(str(path), "EPIC")
-            combined_mode = mode
-            break
-    if not lcs and combined is None:
+    if not lcs:
         return {"status": "missing", "reason": "no corrected light curves found"}
-    fig, axes = plt.subplots(2, 1, figsize=(10.0, 7.0), sharex=True, constrained_layout=True)
+    fig, axes = plt.subplots(
+        2, 1, figsize=(10.0, 7.0), sharex=True, constrained_layout=True
+    )
     base_t0 = None
     for lc in lcs:
         if base_t0 is None:
@@ -2038,28 +2053,6 @@ def check_lcurve(env: dict[str, str], outdir: Path) -> dict[str, Any]:
     axes[0].set_title("Per-instrument corrected light curves")
     if lcs:
         axes[0].legend(loc="best", fontsize=8)
-    if combined is not None:
-        if base_t0 is None:
-            base_t0 = combined.time[0]
-        t_ks = (combined.time - base_t0) / 1000.0
-        axes[0].errorbar(
-            t_ks,
-            combined.rate,
-            yerr=combined.error,
-            fmt="none",
-            elinewidth=0.6,
-            capsize=0,
-        )
-        axes[0].step(
-            t_ks, combined.rate, where="mid", label=f"EPIC total ({combined_mode})"
-        )
-        if combined.fracexp is not None:
-            axes[1].step(
-                t_ks,
-                combined.fracexp,
-                where="mid",
-                label=f"EPIC total ({combined_mode})",
-            )
     axes[1].set_xlabel("Time from first bin (ks)")
     axes[1].set_ylabel("FRACEXP")
     axes[1].set_ylim(-0.05, 1.05)
@@ -2076,69 +2069,73 @@ def check_lcurve(env: dict[str, str], outdir: Path) -> dict[str, Any]:
         "instrument_modes": ", ".join((f"{k}:{v}" for k, v in sorted(modes.items()))),
         "n_abs_cameras": n_abs,
         "n_relonly_cameras": n_relonly,
-        "combined_mode": combined_mode,
     }
-    if combined is not None:
-        finite = np.isfinite(combined.rate)
-        out["combined_mean_rate"] = (
-            float(np.nanmean(combined.rate[finite])) if np.any(finite) else None
-        )
-        out["combined_n_bins"] = int(np.count_nonzero(finite))
     return out
 
 
 def check_spectrum(env: dict[str, str], outdir: Path) -> dict[str, Any]:
     specdir = Path(env["WORKDIR"]) / "spectra"
-    src_path = specdir / "EPIC_src_combined_grp.fits"
-    if not src_path.exists():
-        src_path = specdir / "EPIC_src_combined.fits"
-    bkg_path = specdir / "EPIC_bkg_combined.fits"
-    if not src_path.exists() or not bkg_path.exists():
+    inst_data: list[tuple[str, Any, Any]] = []
+    for inst in ("PN", "M1", "M2"):
+        grp_path = specdir / f"{inst}_src_spec_grp.fits"
+        src_path = grp_path if grp_path.exists() else specdir / f"{inst}_src_spec.fits"
+        bkg_path = specdir / f"{inst}_bkg_spec.fits"
+        if src_path.exists() and bkg_path.exists():
+            inst_data.append(
+                (inst, read_spectrum(str(src_path)), read_spectrum(str(bkg_path)))
+            )
+    if not inst_data:
         return {
             "status": "missing",
-            "reason": "combined source/background spectra not found",
+            "reason": "no per-instrument source/background spectra found",
         }
-    src = read_spectrum(str(src_path))
-    bkg = read_spectrum(str(bkg_path))
-    if len(src.channel) != len(bkg.channel):
-        return {
-            "status": "error",
-            "reason": "source and background spectra have different lengths",
+    n_inst = len(inst_data)
+    fig, axes = plt.subplots(
+        2,
+        n_inst,
+        figsize=(5.0 * n_inst, 7.5),
+        sharex=True,
+        squeeze=False,
+        constrained_layout=True,
+    )
+    results: dict[str, Any] = {"status": "ok", "instruments": {}}
+    for col, (inst, src, bkg) in enumerate(inst_data):
+        if len(src.channel) != len(bkg.channel):
+            results["instruments"][inst] = {"error": "channel length mismatch"}
+            continue
+        scale = 1.0
+        if (
+            src.exposure
+            and bkg.exposure
+            and src.backscal
+            and bkg.backscal
+            and (src.backscal != 0)
+            and (bkg.backscal != 0)
+        ):
+            scale = src.exposure / bkg.exposure * (src.backscal / bkg.backscal)
+        scaled_bkg = bkg.counts * scale
+        net = src.counts - scaled_bkg
+        axes[0, col].step(src.channel, src.counts, where="mid", label="source")
+        axes[0, col].step(src.channel, scaled_bkg, where="mid", label="scaled bkg")
+        axes[0, col].set_yscale("log")
+        axes[0, col].set_ylabel("Counts / bin")
+        axes[0, col].set_title(f"{inst} spectrum")
+        axes[0, col].legend(loc="best", fontsize=7)
+        axes[1, col].step(src.channel, net, where="mid")
+        axes[1, col].axhline(0.0, linestyle="--", linewidth=1.0)
+        axes[1, col].set_xlabel("Channel")
+        axes[1, col].set_ylabel("Approx. net counts / bin")
+        axes[1, col].set_title(f"{inst} source - scaled bkg")
+        results["instruments"][inst] = {
+            "src_total_counts": float(np.nansum(src.counts)),
+            "scaled_bkg_total_counts": float(np.nansum(scaled_bkg)),
+            "approx_net_total_counts": float(np.nansum(net)),
+            "background_scale_used": scale,
         }
-    scale = 1.0
-    if (
-        src.exposure
-        and bkg.exposure
-        and src.backscal
-        and bkg.backscal
-        and (src.backscal != 0)
-        and (bkg.backscal != 0)
-    ):
-        scale = src.exposure / bkg.exposure * (src.backscal / bkg.backscal)
-    scaled_bkg = bkg.counts * scale
-    net = src.counts - scaled_bkg
-    fig, axes = plt.subplots(2, 1, figsize=(10.0, 7.5), sharex=True, constrained_layout=True)
-    axes[0].step(src.channel, src.counts, where="mid", label="source")
-    axes[0].step(src.channel, scaled_bkg, where="mid", label="scaled background")
-    axes[0].set_yscale("log")
-    axes[0].set_ylabel("Counts / bin")
-    axes[0].set_title("Combined spectrum quick-look")
-    axes[0].legend(loc="best", fontsize=8)
-    axes[1].step(src.channel, net, where="mid")
-    axes[1].axhline(0.0, linestyle="--", linewidth=1.0)
-    axes[1].set_xlabel("Channel")
-    axes[1].set_ylabel("Approx. net counts / bin")
-    axes[1].set_title("Approximate source - scaled background")
     png = outdir / "06_spectrum.png"
     savefig(fig, str(png))
-    return {
-        "status": "ok",
-        "png": png.name,
-        "src_total_counts": float(np.nansum(src.counts)),
-        "scaled_bkg_total_counts": float(np.nansum(scaled_bkg)),
-        "approx_net_total_counts": float(np.nansum(net)),
-        "background_scale_used": scale,
-    }
+    results["png"] = png.name
+    return results
 
 
 def _first_band(env: dict[str, str]) -> str:
@@ -2161,7 +2158,9 @@ def _parse_seginfo(path: Path) -> dict[str, str]:
 
 
 def check_pointings(
-    env: dict[str, str], outdir: Path, band_label: str | None = None,
+    env: dict[str, str],
+    outdir: Path,
+    band_label: str | None = None,
     inst_filter: str | None = None,
 ) -> dict[str, Any]:
     """Per-time-slice comet-frame mosaic — shows each temporal chunk before stacking."""
@@ -2233,7 +2232,8 @@ def check_pointings(
         xi = x[sel]
         yi = y[sel]
         img, _, _ = np.histogram2d(
-            yi, xi,
+            yi,
+            xi,
             bins=[
                 np.arange(y_min, y_max + bin_phys, bin_phys),
                 np.arange(x_min, x_max + bin_phys, bin_phys),
@@ -2261,7 +2261,9 @@ def check_pointings(
 
     inst_tag = f" [{inst_filter}]" if inst_filter else ""
     fig, axes = qpu.make_figure(
-        nrows, ncols, figscale=3.2,
+        nrows,
+        ncols,
+        figscale=3.2,
         suptitle=f"Per-time-slice comet-frame mosaic ({label}, {slice_dur_ks:.1f} ks bins){inst_tag}",
     )
 
@@ -2270,9 +2272,15 @@ def check_pointings(
         ax = axes[r, c]
         norm = PowerNorm(gamma=0.5, vmin=0, vmax=vmax_slice)
         qpu.imshow_arcsec(
-            ax, images[i], extent, norm=norm, cmap=qpu.COUNTS_CMAP,
-            title=slice_labels[i], cbar_label="counts",
-            show_xlabel=(r == nrows - 1), show_ylabel=(c == 0),
+            ax,
+            images[i],
+            extent,
+            norm=norm,
+            cmap=qpu.COUNTS_CMAP,
+            title=slice_labels[i],
+            cbar_label="counts",
+            show_xlabel=(r == nrows - 1),
+            show_ylabel=(c == 0),
         )
         qpu.add_apertures(ax, env, color="cyan", lw_src=0.8, lw_bkg=0.6)
 
@@ -2281,9 +2289,15 @@ def check_pointings(
     ax_cum = axes[r_cum, c_cum]
     norm_cum = PowerNorm(gamma=0.5, vmin=0, vmax=vmax_cum)
     qpu.imshow_arcsec(
-        ax_cum, cumulative, extent, norm=norm_cum, cmap=qpu.COUNTS_CMAP,
-        title="CUMULATIVE", cbar_label="counts",
-        show_xlabel=(r_cum == nrows - 1), show_ylabel=(c_cum == 0),
+        ax_cum,
+        cumulative,
+        extent,
+        norm=norm_cum,
+        cmap=qpu.COUNTS_CMAP,
+        title="CUMULATIVE",
+        cbar_label="counts",
+        show_xlabel=(r_cum == nrows - 1),
+        show_ylabel=(c_cum == 0),
     )
     qpu.add_apertures(ax_cum, env, color="cyan", lw_src=1.2, lw_bkg=0.8)
 
@@ -2322,9 +2336,7 @@ def check_pointings_per_inst(
     return combined
 
 
-def check_source_filter(
-    env: dict[str, str], outdir: Path
-) -> dict[str, Any]:
+def check_source_filter(env: dict[str, str], outdir: Path) -> dict[str, Any]:
     """Diagnostics for sky-frame source filtering: events removed per source, spatial footprint."""
     import plot_utils as qpu
 
@@ -2359,8 +2371,9 @@ def check_source_filter(
     sorted_srcs = sorted(all_removals.items(), key=lambda kv: kv[1], reverse=True)
 
     # Layout: 2×2
-    fig, axes = qpu.make_figure(2, 2, figscale=5.0,
-                                 suptitle="Source filtering diagnostics")
+    fig, axes = qpu.make_figure(
+        2, 2, figscale=5.0, suptitle="Source filtering diagnostics"
+    )
 
     # Panel 1: Sky-frame source positions (top-left)
     ax_sky = axes[0, 0]
@@ -2381,8 +2394,16 @@ def check_source_filter(
                 sizes.append(all_removals.get(str(s), 0))
             sizes = np.array(sizes, dtype=float)
             sizes = 10 + 200 * sizes / max(sizes.max(), 1)
-            sc = ax_sky.scatter(src_dx, src_dy, s=sizes, c=src.detml if src.detml is not None else "red",
-                           cmap="plasma", alpha=0.7, edgecolors="k", linewidths=0.3)
+            sc = ax_sky.scatter(
+                src_dx,
+                src_dy,
+                s=sizes,
+                c=src.detml if src.detml is not None else "red",
+                cmap="plasma",
+                alpha=0.7,
+                edgecolors="k",
+                linewidths=0.3,
+            )
             if src.detml is not None:
                 qpu.matched_colorbar(ax_sky, sc, label="DET_ML")
             ax_sky.legend(fontsize=7, loc="upper right")
@@ -2403,7 +2424,9 @@ def check_source_filter(
         top_n = min(15, len(sorted_srcs))
         top_ids = [s[0] for s in sorted_srcs[:top_n]]
         top_counts = [s[1] for s in sorted_srcs[:top_n]]
-        bars = ax_bar.barh(range(top_n), top_counts, color=qpu.INST_COLORS["EPIC"], alpha=0.8)
+        bars = ax_bar.barh(
+            range(top_n), top_counts, color=qpu.INST_COLORS["EPIC"], alpha=0.8
+        )
         ax_bar.set_yticks(range(top_n))
         ax_bar.set_yticklabels([f"src {s}" for s in top_ids], fontsize=7)
         ax_bar.invert_yaxis()
@@ -2433,10 +2456,14 @@ def check_source_filter(
         ax_inst.set_xticks(x_pos)
         ax_inst.set_xticklabels(inst_names, fontsize=9)
         ax_inst.set_ylabel("Events removed (%)", fontsize=8)
-        ax_inst.set_title("Removal fraction per instrument", fontsize=9, fontweight="bold")
+        ax_inst.set_title(
+            "Removal fraction per instrument", fontsize=9, fontweight="bold"
+        )
         ax_inst.tick_params(labelsize=7)
         for i, (p, r) in enumerate(zip(pct, inst_removed)):
-            ax_inst.text(i, p + 0.1, f"{p:.2f}%\n({r})", ha="center", va="bottom", fontsize=7)
+            ax_inst.text(
+                i, p + 0.1, f"{p:.2f}%\n({r})", ha="center", va="bottom", fontsize=7
+            )
     else:
         ax_inst.text(0.5, 0.5, "No data", ha="center", va="center")
         ax_inst.set_axis_off()
@@ -2454,8 +2481,10 @@ def check_source_filter(
     for inst in ["PN", "M1", "M2"]:
         if inst in reports:
             r = reports[inst]
-            lines.append(f"{inst}: {r.get('n_removed_events',0):,} / {r.get('n_input_events',0):,} "
-                        f"({100*r.get('n_removed_events',0)/max(r.get('n_input_events',1),1):.2f}%)")
+            lines.append(
+                f"{inst}: {r.get('n_removed_events',0):,} / {r.get('n_input_events',0):,} "
+                f"({100*r.get('n_removed_events',0)/max(r.get('n_input_events',1),1):.2f}%)"
+            )
     qpu.summary_text_panel(ax_txt, lines, fontsize=8.5)
     ax_txt.set_title("Summary", fontsize=9, fontweight="bold")
 
@@ -2543,8 +2572,12 @@ def check_image_per_inst(
 
             nrows_p = 2
             ncols_p = 2
-            fig, axes = qpu.make_figure(nrows_p, ncols_p, figscale=4.5,
-                                         suptitle=f"{inst} per-detector diagnostics ({label})")
+            fig, axes = qpu.make_figure(
+                nrows_p,
+                ncols_p,
+                figscale=4.5,
+                suptitle=f"{inst} per-detector diagnostics ({label})",
+            )
 
             for idx, (ptitle, pdata, ptype) in enumerate(panels[:4]):
                 r, c = divmod(idx, ncols_p)
@@ -2556,18 +2589,30 @@ def check_image_per_inst(
 
                 if ptype == "counts":
                     norm = qpu.rate_norm(pdata)
-                    qpu.imshow_arcsec(ax, pdata, extent, norm=norm,
-                                       cmap=qpu.COUNTS_CMAP, title=ptitle,
-                                       cbar_label="counts",
-                                       show_xlabel=(r == nrows_p - 1),
-                                       show_ylabel=(c == 0))
+                    qpu.imshow_arcsec(
+                        ax,
+                        pdata,
+                        extent,
+                        norm=norm,
+                        cmap=qpu.COUNTS_CMAP,
+                        title=ptitle,
+                        cbar_label="counts",
+                        show_xlabel=(r == nrows_p - 1),
+                        show_ylabel=(c == 0),
+                    )
                 elif ptype == "expo":
                     norm = qpu.rate_norm(pdata, pct=99.5)
-                    qpu.imshow_arcsec(ax, pdata, extent, norm=norm,
-                                       cmap=qpu.EXPO_CMAP, title=ptitle,
-                                       cbar_label="s",
-                                       show_xlabel=(r == nrows_p - 1),
-                                       show_ylabel=(c == 0))
+                    qpu.imshow_arcsec(
+                        ax,
+                        pdata,
+                        extent,
+                        norm=norm,
+                        cmap=qpu.EXPO_CMAP,
+                        title=ptitle,
+                        cbar_label="s",
+                        show_xlabel=(r == nrows_p - 1),
+                        show_ylabel=(c == 0),
+                    )
                 elif ptype == "net":
                     # Symmetric scale for net rate
                     if expo is not None:
@@ -2575,22 +2620,34 @@ def check_image_per_inst(
                     else:
                         masked = pdata
                     norm = qpu.symmetric_norm(masked)
-                    qpu.imshow_arcsec(ax, masked, extent, norm=norm,
-                                       cmap=qpu.NET_CMAP, title=ptitle,
-                                       cbar_label="ct/s/px",
-                                       show_xlabel=(r == nrows_p - 1),
-                                       show_ylabel=(c == 0))
+                    qpu.imshow_arcsec(
+                        ax,
+                        masked,
+                        extent,
+                        norm=norm,
+                        cmap=qpu.NET_CMAP,
+                        title=ptitle,
+                        cbar_label="ct/s/px",
+                        show_xlabel=(r == nrows_p - 1),
+                        show_ylabel=(c == 0),
+                    )
                 else:  # rate
                     if expo is not None:
                         masked = qpu.mask_low_exposure(pdata, expo)
                     else:
                         masked = pdata
                     norm = qpu.rate_norm(masked, exposure=expo)
-                    qpu.imshow_arcsec(ax, masked, extent, norm=norm,
-                                       cmap=qpu.RATE_CMAP, title=ptitle,
-                                       cbar_label="ct/s/px",
-                                       show_xlabel=(r == nrows_p - 1),
-                                       show_ylabel=(c == 0))
+                    qpu.imshow_arcsec(
+                        ax,
+                        masked,
+                        extent,
+                        norm=norm,
+                        cmap=qpu.RATE_CMAP,
+                        title=ptitle,
+                        cbar_label="ct/s/px",
+                        show_xlabel=(r == nrows_p - 1),
+                        show_ylabel=(c == 0),
+                    )
 
                 qpu.add_apertures(ax, env, color="cyan")
 
@@ -2606,12 +2663,17 @@ def check_image_per_inst(
             if first_stats is None:
                 # Source aperture stats for this instrument
                 src_mask = circle_mask_from_extent(
-                    panels[0][1].shape, extent,
+                    panels[0][1].shape,
+                    extent,
                     env_float(env, "SRC_DX_ARCSEC", 0.0),
                     env_float(env, "SRC_DY_ARCSEC", 0.0),
                     env_float(env, "SRC_R_ARCSEC", 60.0),
                 )
-                src_med = float(np.nanmedian(expo[src_mask])) if expo is not None and np.any(src_mask) else math.nan
+                src_med = (
+                    float(np.nanmedian(expo[src_mask]))
+                    if expo is not None and np.any(src_mask)
+                    else math.nan
+                )
                 first_stats = {
                     "status": "ok",
                     "png": png.name,
@@ -2663,7 +2725,10 @@ def check_radial_profile(
     # Build radial distance array (arcsec from center)
     ny, nx_img = counts.shape
     e_min, e_max, n_min, n_max = extent
-    xs = np.linspace(e_min, e_max, nx_img, endpoint=False) + 0.5 * (e_max - e_min) / nx_img
+    xs = (
+        np.linspace(e_min, e_max, nx_img, endpoint=False)
+        + 0.5 * (e_max - e_min) / nx_img
+    )
     ys = np.linspace(n_min, n_max, ny, endpoint=False) + 0.5 * (n_max - n_min) / ny
     xx, yy = np.meshgrid(xs, ys)
     rr = np.sqrt(xx**2 + yy**2)
@@ -2698,7 +2763,11 @@ def check_radial_profile(
         profile_err[i] = np.sqrt(total_cts) / total_exp if total_exp > 0 else np.nan
         if bkg_rate is not None:
             bkg_vals = bkg_rate[valid]
-            profile_bkg[i] = float(np.nanmean(bkg_vals[np.isfinite(bkg_vals)])) if np.any(np.isfinite(bkg_vals)) else np.nan
+            profile_bkg[i] = (
+                float(np.nanmean(bkg_vals[np.isfinite(bkg_vals)]))
+                if np.any(np.isfinite(bkg_vals))
+                else np.nan
+            )
 
     # Azimuthal sectors (8 sectors)
     theta = np.degrees(np.arctan2(yy, xx))  # -180 to 180
@@ -2717,17 +2786,29 @@ def check_radial_profile(
         sector_profiles[sector_labels[s]] = sprof
 
     # Plot: 3-panel layout
-    fig, axes = qpu.make_figure(1, 3, figscale=4.0,
-                                 suptitle=f"Radial profile ({label})")
+    fig, axes = qpu.make_figure(
+        1, 3, figscale=4.0, suptitle=f"Radial profile ({label})"
+    )
 
     # Panel 1: Rate vs radius with background
     ax1 = axes[0, 0]
     good = np.isfinite(profile_rate)
-    ax1.errorbar(r_centers[good], profile_rate[good], yerr=profile_err[good],
-                fmt="o-", ms=2, lw=1.0, color="k", label="Rate", capsize=1)
+    ax1.errorbar(
+        r_centers[good],
+        profile_rate[good],
+        yerr=profile_err[good],
+        fmt="o-",
+        ms=2,
+        lw=1.0,
+        color="k",
+        label="Rate",
+        capsize=1,
+    )
     if bkg_rate is not None:
         good_b = np.isfinite(profile_bkg)
-        ax1.plot(r_centers[good_b], profile_bkg[good_b], "r--", lw=1.2, label="Background")
+        ax1.plot(
+            r_centers[good_b], profile_bkg[good_b], "r--", lw=1.2, label="Background"
+        )
     ax1.set_xlabel("Radius (arcsec)", fontsize=9)
     ax1.set_ylabel("Rate (ct/s/pixel)", fontsize=9)
     ax1.set_title("Azimuthal average", fontsize=9, fontweight="bold")
@@ -2752,7 +2833,13 @@ def check_radial_profile(
             if idx < len(r_centers):
                 ax2.axhline(target, color="gray", ls=ls, lw=0.8)
                 ax2.axvline(r_centers[idx], color="gray", ls=ls, lw=0.8)
-                ax2.text(r_centers[idx] + 5, target, f"{int(frac*100)}%", fontsize=7, va="bottom")
+                ax2.text(
+                    r_centers[idx] + 5,
+                    target,
+                    f"{int(frac*100)}%",
+                    fontsize=7,
+                    va="bottom",
+                )
 
     # Panel 3: Sector profiles
     ax3 = axes[0, 2]
@@ -2760,8 +2847,15 @@ def check_radial_profile(
     for (slabel, sprof), sc in zip(sector_profiles.items(), sector_colors):
         good_s = np.isfinite(sprof) & (r_centers < max_r * 0.7)
         if np.any(good_s):
-            ax3.plot(r_centers[good_s], sprof[good_s], "-", color=sc, lw=1.0,
-                    alpha=0.8, label=slabel)
+            ax3.plot(
+                r_centers[good_s],
+                sprof[good_s],
+                "-",
+                color=sc,
+                lw=1.0,
+                alpha=0.8,
+                label=slabel,
+            )
     ax3.set_xlabel("Radius (arcsec)", fontsize=9)
     ax3.set_ylabel("Rate (ct/s/pixel)", fontsize=9)
     ax3.set_title("Sector profiles (8 azimuths)", fontsize=9, fontweight="bold")
@@ -2784,7 +2878,9 @@ def check_radial_profile(
         "max_radius_arcsec": round(float(max_r), 1),
         "n_radial_bins": len(r_centers),
         "source_counts_within_r": round(src_total, 1),
-        "total_enclosed_counts": round(float(cum_counts[-1]), 1) if len(cum_counts) else 0,
+        "total_enclosed_counts": (
+            round(float(cum_counts[-1]), 1) if len(cum_counts) else 0
+        ),
     }
 
 
@@ -2834,8 +2930,9 @@ def check_frames(
         panels.append(("Comet clean rate", data_cl, comet_extent, "comet"))
 
     ncols = len(panels)
-    fig, axes = qpu.make_figure(1, ncols, figscale=4.5,
-                                 suptitle=f"Frame comparison ({label})")
+    fig, axes = qpu.make_figure(
+        1, ncols, figscale=4.5, suptitle=f"Frame comparison ({label})"
+    )
 
     for idx, (title, data, ext, frame_type) in enumerate(panels):
         ax = axes[0, idx]
@@ -2849,9 +2946,15 @@ def check_frames(
             expo_data, _ = read_image(str(cm_exp))
         norm = qpu.rate_norm(data, exposure=expo_data)
         qpu.imshow_arcsec(
-            ax, data, ext, norm=norm, cmap=qpu.RATE_CMAP,
-            title=title, cbar_label="ct/s/px",
-            show_xlabel=True, show_ylabel=(idx == 0),
+            ax,
+            data,
+            ext,
+            norm=norm,
+            cmap=qpu.RATE_CMAP,
+            title=title,
+            cbar_label="ct/s/px",
+            show_xlabel=True,
+            show_ylabel=(idx == 0),
         )
         if frame_type == "comet":
             qpu.add_apertures(ax, env, color="cyan")
@@ -2865,7 +2968,9 @@ def check_frames(
                     ref_ra = ss_extent_info[1]
                     ref_dec = ss_extent_info[2]
                     if ref_ra is not None and ref_dec is not None:
-                        trk_dx, trk_dy = sky_offsets_arcsec(track.ra, track.dec, ref_ra, ref_dec)
+                        trk_dx, trk_dy = sky_offsets_arcsec(
+                            track.ra, track.dec, ref_ra, ref_dec
+                        )
                         ax.plot(trk_dx, trk_dy, "c-", lw=1.5, alpha=0.8)
                 except Exception:
                     pass
@@ -2920,7 +3025,9 @@ def check_spotcheck(
     nrows = (
         2 if any((masked is not None for _seg, _img, masked, _info in panels)) else 1
     )
-    fig, axes = plt.subplots(nrows, n, figsize=(4.8 * n, 4.4 * nrows), squeeze=False, constrained_layout=True)
+    fig, axes = plt.subplots(
+        nrows, n, figsize=(4.8 * n, 4.4 * nrows), squeeze=False, constrained_layout=True
+    )
     summary = []
     for col, (segname, img_path, masked_path, info) in enumerate(panels):
         data, _ = read_image(str(img_path))
@@ -3186,7 +3293,9 @@ def check_mosaics(
             ax.text(0.5, 0.5, "no mask", ha="center", va="center")
             ax.set_axis_off()
             ax.set_title("Source mask", fontsize=9)
-        fig.suptitle(f"Still-sky mosaic diagnostics ({band})", fontsize=13, fontweight="bold")
+        fig.suptitle(
+            f"Still-sky mosaic diagnostics ({band})", fontsize=13, fontweight="bold"
+        )
         png = outdir / f"08_stillsky_mosaic_{band}.png"
         savefig(fig, str(png))
         rendered.append(png)
@@ -3260,7 +3369,9 @@ def check_mosaics(
             bpath = banddir / f"{inst}_bkg.fits"
             if bpath.exists():
                 data, _ = read_image(str(bpath))
-                _safe_imshow(ax, data, comet_extent, norm=nice_norm(data, stretch="sqrt"))
+                _safe_imshow(
+                    ax, data, comet_extent, norm=nice_norm(data, stretch="sqrt")
+                )
                 add_apertures(ax, env)
             else:
                 ax.text(0.5, 0.5, f"{inst} bkg missing", ha="center", va="center")
@@ -3287,7 +3398,9 @@ def check_mosaics(
         if comet_extent is not None:
             ax.set_xlabel("East offset (arcsec)", fontsize=8)
             ax.set_ylabel("North offset (arcsec)", fontsize=8)
-        fig.suptitle(f"Comet-frame mosaic diagnostics ({band})", fontsize=13, fontweight="bold")
+        fig.suptitle(
+            f"Comet-frame mosaic diagnostics ({band})", fontsize=13, fontweight="bold"
+        )
         png = outdir / f"08_comet_mosaic_{band}.png"
         savefig(fig, str(png))
         rendered.append(png)

@@ -74,9 +74,9 @@ Run order for a complete reduction:
 | 6 | `comet` | `attmove` + `odfingest` + `atthkgen` + `attcalc` — shift to comet rest frame |
 | 7 | `contam` | Policy-based contamination GTIs and spatial trail masks |
 | 8 | `image` | `evselect` (counts) + `eexpmap` (exposure) → combined images per band |
-| 9 | `lcurve` | `evselect` + `epiclccorr` + `elcbuild` — corrected EPIC light curves |
-| 10 | `spectrum` | `especget` + `epicspeccombine` + `specgroup` — source/background spectra + response |
-| 11 | `merge` | `merge` — combined EPIC comet-frame event lists |
+| 9 | `lcurve` | `evselect` + `epiclccorr` — per-instrument corrected light curves |
+| 10 | `spectrum` | `especget` + `specgroup` — per-instrument spectra + response |
+| 11 | `merge` | Per-instrument tagged comet-frame event lists |
 | 12 | `qc` | Automated diagnostic plots |
 
 Meta-stages: `science` runs stages 3–11; `all` runs 1–12.
@@ -93,9 +93,9 @@ WORKDIR/
   comet/         moved ODF, moved_atthk.dat, *_comet.fits per instrument
   contam/        science_gti.fits, contamination products, trail mask
   images/        per-band counts/exposure/rate images
-  lcurve/        per-instrument + EPIC-combined light curves
-  spectra/       per-instrument + EPIC-combined spectra and responses
-  final/         EPIC_comet_merged_{full,sciencegti}.fits
+  lcurve/        per-instrument corrected light curves
+  spectra/       per-instrument spectra, ARFs, RMFs, grouped spectra
+  final/         per-instrument tagged comet-frame event lists
   qc/            diagnostic PNGs
   logs/          per-step logs
 ```

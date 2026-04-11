@@ -406,10 +406,11 @@ Post-processing (if IMAGE_WRITE_NET_PRODUCTS=yes):
   9.  LCURVE — Light Curves
 ==============================================================================
 
-SAS tools:  evselect, epiclccorr, elcbuild
-Helpers:    scripts/combine_epic_lightcurves.py
+SAS tools:  evselect, epiclccorr
+Helpers:    scripts/combine_epic_lightcurves.py (optional, not invoked by default)
 
-Purpose:  Generate background-subtracted, corrected EPIC light curves.
+Purpose:  Generate background-subtracted, corrected EPIC light curves
+          (per instrument).
 
 Procedure per instrument:
   1. evselect — filter the analysis event list (from contam stage) with
@@ -440,24 +441,22 @@ Procedure per instrument:
 
   5. Per-instrument corrected LCs are symlinked as ${inst}_corr.fits.
 
-Combining:
-  If ≥2 instruments produced abs (or relonly) LCs:
-    elcbuild — bundle per-instrument LCs into one FITS file.
-    combine_epic_lightcurves.py — sum the per-instrument rate arrays
-    into EPIC_total_corr_{abs|relonly}_lc.fits and .csv.
-
-  The preferred combined LC is symlinked as EPIC_total_corr_lc.fits.
+Output:
+  Per-instrument corrected LCs are symlinked as ${inst}_corr.fits.
+  Instruments are kept separate — no cross-instrument combining is
+  performed.  For joint analysis, load the per-instrument LCs into
+  the fitting tool and model them simultaneously.
 
 
 ==============================================================================
   10.  SPECTRUM
 ==============================================================================
 
-SAS tools:  evselect, especget, epicspeccombine, specgroup
+SAS tools:  evselect, especget, specgroup
 Helper:     (none beyond the pipeline itself)
 
-Purpose:  Extract source and background spectra with response matrices,
-          combine across instruments, and group for fitting.
+Purpose:  Extract source and background spectra with response matrices
+          and group per instrument for fitting.
 
 Procedure per instrument:
   1. evselect — filter the analysis event list with science GTI + flare
@@ -478,50 +477,39 @@ Procedure per instrument:
                          skip the RMF (the RMF name is still passed).
      Produces: src_spec.fits, bkg_spec.fits, .arf, .rmf per instrument.
 
-Combining (≥2 instruments):
-  epicspeccombine
-    pha / bkg / arf / rmf — lists of per-instrument files
-    allowHEdiff=yes (tolerates minor energy-grid mismatches between
-    PN and MOS RMFs)
-  → EPIC_src_combined.fits, EPIC_bkg_combined.fits, EPIC_rsp_combined.fits
-
-  If epicspeccombine fails (typically mismatched RMF grids), the
-  per-instrument spectra remain available for simultaneous fitting in
-  XSPEC/Sherpa.
-
 Grouping:
-  specgroup
+  specgroup is run per-instrument:
     mincounts  = SPECGROUP_MINCOUNTS (default 25)
     oversample = SPECGROUP_OVERSAMPLE (default 3.0)
-  → EPIC_src_combined_grp.fits
+  → ${inst}_src_spec_grp.fits
+
+  Instruments are kept separate — no cross-instrument combining is
+  performed.  For spectral fitting, load the per-instrument spectra
+  into XSPEC/Sherpa and fit them simultaneously.
 
 
 ==============================================================================
   11.  MERGE
 ==============================================================================
 
-SAS tools:  merge, evselect
+SAS tools:  evselect
 Helpers:    scripts/add_instid_column.py
 
-Purpose:  Produce combined EPIC event lists in the comet frame.
+Purpose:  Produce per-instrument tagged event lists in the comet frame.
 
 Procedure:
   1. For each instrument, add an INSTID column (1=PN, 2=M1, 3=M2)
      via add_instid_column.py.
+     → ${inst}_full_instid.fits
 
-  2. Full comet-frame merge:
-     merge_pairwise_cometref using COMET_REF_RA/DEC and
-     ATTCALC_IMAGE_SIZE_DEG.
-     → EPIC_comet_merged_full.fits
-
-  3. Science-GTI merge:
+  2. Science-GTI filtering:
      evselect filters each instrument's analysis event list through
-     the science GTI, then these are tagged and merged the same way.
-     → EPIC_comet_merged_sciencegti.fits
+     the science GTI, then the result is tagged with INSTID.
+     → ${inst}_science.fits, ${inst}_science_instid.fits
 
-  merge_pairwise_cometref passes:
-    withradec=Y  ra=COMET_REF_RA  dec=COMET_REF_DEC
-    imagesize=ATTCALC_IMAGE_SIZE_DEG  columns="INSTID"
+  Instruments are kept separate — no cross-instrument merging is
+  performed.  The INSTID column is retained so that downstream tools
+  can identify instrument provenance if the user later merges manually.
 
 
 ==============================================================================
@@ -720,7 +708,8 @@ scripts/combine_epic_images.py
   optionally applies trail mask.
 
 scripts/combine_epic_lightcurves.py
-  Sums per-instrument corrected light curves into an EPIC-total LC.
+  (Not invoked by default.)  Can sum per-instrument corrected light
+  curves into an EPIC-total LC if cross-instrument combining is desired.
 
 scripts/image_postproc.py
   Background-subtracted rate image from smoothed exposure.
