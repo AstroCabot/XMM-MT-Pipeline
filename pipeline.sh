@@ -15,7 +15,7 @@ NO_SHORTLINK=0
 
 usage() {
   cat <<'EOF'
-Usage: ./pipeline.sh [init|repro|clean|exposure|all|env] [--config FILE] [--force] [--print-env] [--no-shortlink]
+Usage: ./pipeline.sh [init|repro|clean|exposure|background|all|env] [--config FILE] [--force] [--print-env] [--no-shortlink]
 
 Stages:
   init         Prepare the SAS ODF state used by all later stages:
@@ -29,6 +29,8 @@ Stages:
   clean        Apply standard EPIC event-quality and energy cuts.
 
   exposure     Build soft/hard EPIC counts, exposure, and rate maps.
+
+  background   Build per-pointing quantile background maps.
 
   all          Run every implemented science-production stage in order.
 
@@ -45,7 +47,7 @@ EOF
 
 while (($#)); do
   case "$1" in
-    init|repro|clean|exposure|all|env) STAGE="$1"; shift ;;
+    init|repro|clean|exposure|background|all|env) STAGE="$1"; shift ;;
     --config|-c) CONFIG="$2"; shift 2 ;;
     --force|-f) FORCE=1; shift ;;
     --print-env) PRINT_ENV=1; shift ;;
@@ -89,11 +91,10 @@ REAL_INITDIR="$REAL_WORKDIR/init"
 REPRODIR="$WORKDIR/repro"
 REAL_REPRODIR="$REAL_WORKDIR/repro"
 CLEANDIR="$WORKDIR/clean"
-REAL_CLEANDIR="$REAL_WORKDIR/clean"
 EXPOSUREDIR="$WORKDIR/exposure"
-REAL_EXPOSUREDIR="$REAL_WORKDIR/exposure"
+BACKGROUNDDIR="$WORKDIR/background"
 LOGDIR="$WORKDIR/logs"
-mkdir -p "$INITDIR" "$REPRODIR" "$CLEANDIR" "$EXPOSUREDIR" "$LOGDIR"
+mkdir -p "$INITDIR" "$REPRODIR" "$CLEANDIR" "$EXPOSUREDIR" "$BACKGROUNDDIR" "$LOGDIR"
 
 # ==============================================================================
 # Logging and SAS environment setup
@@ -467,16 +468,15 @@ stage_clean() {
 #
 # Outputs:
 #   output/exposure/grid.env, grid.json
+#   output/exposure/pointings.tsv, slices.tsv
+#   output/exposure/<band>/<inst>/<event>_<pointing>_counts.fits
+#   output/exposure/<band>/<inst>/<event>_<pointing>_exposure.fits
 #   output/exposure/<band>/<inst>_counts.fits
 #   output/exposure/<band>/<inst>_exposure.fits
 #   output/exposure/<band>/EPIC_counts.fits
 #   output/exposure/<band>/EPIC_exposure.fits
 #   output/exposure/<band>/EPIC_rate.fits
 # ==============================================================================
-
-clean_merged_event() {
-  echo "$CLEANDIR/${1}_clean_merged.fits"
-}
 
 image_band_lines() {
   local band label pimin pimax
@@ -497,66 +497,153 @@ stage_exposure() {
   need_cmd evselect
   need_cmd eexpmap
 
-  local inst evt label pimin pimax banddir counts exposure
+  local inst evt label pimin pimax banddir instdir base point start stop ref
+  local counts exposure slices pointings
   local -a events=()
   for inst in $DETECTORS; do
-    evt="$(clean_merged_event "$inst")"
-    [[ -s "$evt" ]] && events+=("$evt")
+    manifest="$CLEANDIR/${inst}_clean_files.txt"
+    [[ -s "$manifest" ]] || continue
+    while IFS= read -r evt; do
+      [[ -n "$evt" ]] && events+=("$evt")
+    done < "$manifest"
   done
-  [[ ${#events[@]} -gt 0 ]] || { echo "No merged clean event files found in $CLEANDIR" >&2; exit 1; }
+  [[ ${#events[@]} -gt 0 ]] || { echo "No clean event files found in $CLEANDIR" >&2; exit 1; }
 
   if [[ "$FORCE" == "1" || ! -s "$EXPOSUREDIR/grid.env" ]]; then
     "$PYTHON" "$SCRIPT_DIR/tools.py" exposure-grid "$EXPOSUREDIR" "$IMAGE_BIN_PHYS" "$IMAGE_PAD_FRAC" "${events[@]}"
   fi
+  slices="$EXPOSUREDIR/slices.tsv"
+  pointings="$EXPOSUREDIR/pointings.tsv"
+  "$PYTHON" "$SCRIPT_DIR/tools.py" exposure-slices "$slices" "$pointings" "$CLEANDIR" "$DETECTORS" "$INITDIR"
   # shellcheck source=/dev/null
   source "$EXPOSUREDIR/grid.env"
+  find "$EXPOSUREDIR" -type f -name '*_events.fits' -delete
 
   while read -r label pimin pimax; do
     [[ -n "$label" ]] || continue
     banddir="$EXPOSUREDIR/$label"
     mkdir -p "$banddir"
-    local -a combine=()
+    local -a epic=()
 
     for inst in $DETECTORS; do
-      evt="$(clean_merged_event "$inst")"
-      [[ -s "$evt" ]] || continue
-      counts="$banddir/${inst}_counts.fits"
-      exposure="$banddir/${inst}_exposure.fits"
+      instdir="$banddir/$inst"
+      mkdir -p "$instdir"
+      local -a det=()
 
-      if [[ "$FORCE" == "1" || ! -s "$counts" ]]; then
-        runlog "exposure_${label}_${inst}_counts" \
-          evselect table="${evt}:EVENTS" \
-            withimageset=yes imageset="$counts" \
-            xcolumn=X ycolumn=Y imagebinning=binSize \
-            ximagebinsize="$BIN_PHYS" yimagebinsize="$BIN_PHYS" \
-            withxranges=yes ximagemin="$X_MIN_PHYS" ximagemax="$X_MAX_PHYS" \
-            withyranges=yes yimagemin="$Y_MIN_PHYS" yimagemax="$Y_MAX_PHYS" \
-            writedss=yes \
-            expression="PI in [$pimin:$pimax]"
-      fi
+      while IFS=$'\t' read -r slice_inst evt base point start stop ref; do
+        [[ "$slice_inst" == "$inst" ]] || continue
+        [[ "$slice_inst" == "inst" ]] && continue
+        counts="$instdir/${base}_counts.fits"
+        exposure="$instdir/${base}_exposure.fits"
 
-      if [[ "$FORCE" == "1" || ! -s "$exposure" ]]; then
-        runlog "exposure_${label}_${inst}_eexpmap" \
-          eexpmap imageset="$counts" \
-            attitudeset="$ATTHKGEN_FILE" \
-            eventset="$evt" \
-            expimageset="$exposure" \
-            pimin="$pimin" pimax="$pimax" \
-            withvignetting=yes \
-            attrebin="$EEXPMAP_ATTREBIN"
-      fi
-      combine+=("$counts" "$exposure")
+        if [[ "$FORCE" == "1" || ! -s "$counts" ]]; then
+          runlog "exposure_${label}_${inst}_${base}_counts" \
+            evselect table="${evt}:EVENTS" \
+              withimageset=yes imageset="$counts" \
+              xcolumn=X ycolumn=Y imagebinning=binSize \
+              ximagebinsize="$BIN_PHYS" yimagebinsize="$BIN_PHYS" \
+              withxranges=yes ximagemin="$X_MIN_PHYS" ximagemax="$X_MAX_PHYS" \
+              withyranges=yes yimagemin="$Y_MIN_PHYS" yimagemax="$Y_MAX_PHYS" \
+              ignorelegallimits=yes \
+              writedss=yes \
+              expression="(TIME>=$start)&&(TIME<=$stop)&&(PI in [$pimin:$pimax])"
+        fi
+
+        if [[ "$FORCE" == "1" || ! -s "$exposure" ]]; then
+          runlog "exposure_${label}_${inst}_${base}_eexpmap" \
+            eexpmap imageset="$counts" \
+              attitudeset="$ATTHKGEN_FILE" \
+              eventset="$evt" \
+              expimageset="$exposure" \
+              pimin="$pimin" pimax="$pimax" \
+              withvignetting=yes \
+              attrebin="$EEXPMAP_ATTREBIN"
+        fi
+        det+=("$counts" "$exposure")
+      done < "$slices"
+
+      [[ ${#det[@]} -gt 0 ]] || continue
+      runlog "exposure_${label}_${inst}_combine" \
+        "$PYTHON" "$SCRIPT_DIR/tools.py" combine-maps \
+          "$banddir/${inst}_counts.fits" \
+          "$banddir/${inst}_exposure.fits" \
+          "$banddir/${inst}_rate.fits" \
+          "${det[@]}"
+      epic+=("$banddir/${inst}_counts.fits" "$banddir/${inst}_exposure.fits")
     done
 
-    [[ ${#combine[@]} -gt 0 ]] || continue
-    if [[ "$FORCE" == "1" || ! -s "$banddir/EPIC_counts.fits" || ! -s "$banddir/EPIC_exposure.fits" || ! -s "$banddir/EPIC_rate.fits" ]]; then
-      runlog "exposure_${label}_combine" \
-        "$PYTHON" "$SCRIPT_DIR/tools.py" combine-maps \
-          "$banddir/EPIC_counts.fits" \
-          "$banddir/EPIC_exposure.fits" \
-          "$banddir/EPIC_rate.fits" \
-          "${combine[@]}"
-    fi
+    [[ ${#epic[@]} -gt 0 ]] || continue
+    runlog "exposure_${label}_combine" \
+      "$PYTHON" "$SCRIPT_DIR/tools.py" combine-maps \
+        "$banddir/EPIC_counts.fits" \
+        "$banddir/EPIC_exposure.fits" \
+        "$banddir/EPIC_rate.fits" \
+        "${epic[@]}"
+  done < <(image_band_lines)
+}
+
+# ==============================================================================
+# Stage: background
+#
+# Purpose:
+#   Build constant per-pointing quantile background maps in counts space.
+#
+# Outputs:
+#   output/background/<band>/<inst>/<event>_<pointing>_{background,net_counts}.fits
+#   output/background/<band>/<inst>_{background,net_counts}.fits
+#   output/background/<band>/EPIC_{background,net_counts}.fits
+#   output/background/<band>/background_summary.tsv
+# ==============================================================================
+
+stage_background() {
+  need_file "$EXPOSUREDIR/grid.json"
+  need_file "$EXPOSUREDIR/slices.tsv"
+
+  local label pimin pimax banddir summary inst slice_inst evt base point start stop ref instdir
+  local counts exposure background net
+  while read -r label pimin pimax; do
+    [[ -n "$label" ]] || continue
+    banddir="$BACKGROUNDDIR/$label"
+    summary="$banddir/background_summary.tsv"
+    mkdir -p "$banddir"
+    rm -f "$summary"
+    find "$banddir" -type f \( -name '*_background.fits' -o -name '*_net_counts.fits' \) -delete
+    local -a epic=()
+
+    for inst in $DETECTORS; do
+      instdir="$banddir/$inst"
+      mkdir -p "$instdir"
+      local -a det=()
+
+      while IFS=$'\t' read -r slice_inst evt base point start stop ref; do
+        [[ "$slice_inst" == "$inst" ]] || continue
+        background="$instdir/${base}_background.fits"
+        net="$instdir/${base}_net_counts.fits"
+        counts="$EXPOSUREDIR/$label/$inst/${base}_counts.fits"
+        exposure="$EXPOSUREDIR/$label/$inst/${base}_exposure.fits"
+        [[ -s "$counts" && -s "$exposure" ]] || continue
+
+        "$PYTHON" "$SCRIPT_DIR/tools.py" background-map \
+          "$counts" "$exposure" "$background" "$net" \
+          "$BACKGROUND_COUNTS_QUANTILE" "$BACKGROUND_MIN_PIXELS" \
+          "$BACKGROUND_EXCLUDE_RADIUS_FRAC" \
+          "$summary" "$label" "$inst" "$base"
+        det+=("$background" "$net")
+      done < "$EXPOSUREDIR/slices.tsv"
+
+      [[ ${#det[@]} -gt 0 ]] || continue
+      "$PYTHON" "$SCRIPT_DIR/tools.py" combine-background \
+        "$banddir/${inst}_background.fits" \
+        "$banddir/${inst}_net_counts.fits" \
+        "${det[@]}"
+      epic+=("$banddir/${inst}_background.fits" "$banddir/${inst}_net_counts.fits")
+    done
+
+    [[ ${#epic[@]} -gt 0 ]] || continue
+    "$PYTHON" "$SCRIPT_DIR/tools.py" combine-background \
+      "$banddir/EPIC_background.fits" \
+      "$banddir/EPIC_net_counts.fits" \
+      "${epic[@]}"
   done < <(image_band_lines)
 }
 
@@ -569,7 +656,8 @@ case "$STAGE" in
   repro) stage_repro ;;
   clean) stage_clean ;;
   exposure) stage_exposure ;;
-  all) stage_init; stage_repro; stage_clean; stage_exposure ;;
+  background) stage_background ;;
+  all) stage_init; stage_repro; stage_clean; stage_exposure; stage_background ;;
   env) print_env ;;
   *) echo "Unknown stage: $STAGE" >&2; exit 2 ;;
 esac

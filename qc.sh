@@ -12,21 +12,23 @@ STAGE="init"
 
 usage() {
   cat <<'EOF'
-Usage: ./qc.sh [init|repro|clean|exposure|all] [--config FILE]
+Usage: ./qc.sh [init|repro|clean|exposure|background|all] [--config FILE]
 
 Stages:
   init   Summarize initial SAS/ODF setup products.
   repro  Summarize reprocessed event lists and attitude products.
-  clean  Summarize cleaned event lists and make PN soft/hard mosaics.
+  clean  Summarize cleaned event lists and make soft/hard mosaics.
   exposure
          Summarize EPIC exposure products and render quick-look maps.
+  background
+         Summarize quantile background products and render quick-look maps.
   all    Run QC for every implemented pipeline stage.
 EOF
 }
 
 while (($#)); do
   case "$1" in
-    init|repro|clean|exposure|all) STAGE="$1"; shift ;;
+    init|repro|clean|exposure|background|all) STAGE="$1"; shift ;;
     --config|-c) CONFIG="$2"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -187,23 +189,31 @@ image_band_labels() {
   done
 }
 
+single_detector() {
+  set -- $DETECTORS
+  [[ $# -eq 1 ]] && echo "$1"
+}
+
 qc_exposure() {
   local expdir="$WORKDIR/exposure"
   local qcdir="$WORKDIR/qc/exposure"
   local files="$qcdir/output_files.txt"
   local status="$qcdir/status.txt"
-  local label
+  local label detector counts_map exposure_map
 
   [[ -d "$expdir" ]] || { echo "Missing exposure output directory: $expdir" >&2; exit 1; }
   mkdir -p "$qcdir"
+  detector="$(single_detector)"
 
   {
-    find "$expdir" -maxdepth 2 \( -type f -o -type l \) | sort
+    find "$expdir" -maxdepth 3 \( -type f -o -type l \) | sort
     [[ -d "$WORKDIR/logs" ]] && find "$WORKDIR/logs" -maxdepth 1 -type f -name 'exposure_*.log' | sort
   } > "$files"
 
   {
     [[ -s "$expdir/grid.env" ]] && echo "grid.env ok" || echo "grid.env missing"
+    [[ -s "$expdir/pointings.tsv" ]] && echo "pointings $(($(wc -l < "$expdir/pointings.tsv") - 1))" || echo "pointings.tsv missing"
+    [[ -s "$expdir/slices.tsv" ]] && echo "slices $(($(wc -l < "$expdir/slices.tsv") - 1))" || echo "slices.tsv missing"
     for label in $(image_band_labels); do
       for inst in $DETECTORS; do
         [[ -s "$expdir/$label/${inst}_counts.fits" ]] && echo "$label/${inst}_counts.fits ok" || echo "$label/${inst}_counts.fits missing"
@@ -215,15 +225,89 @@ qc_exposure() {
     done
   } > "$status"
 
+  rm -f "$qcdir"/*.png
   for label in $(image_band_labels); do
-    [[ -s "$expdir/$label/EPIC_exposure.fits" ]] && \
-      "$PYTHON" "$SCRIPT_DIR/tools.py" fits-png "$expdir/$label/EPIC_exposure.fits" "$qcdir/${label}_exposure.png" viridis linear
+    counts_map="$expdir/$label/EPIC_counts.fits"
+    exposure_map="$expdir/$label/EPIC_exposure.fits"
+    if [[ -n "$detector" ]]; then
+      counts_map="$expdir/$label/${detector}_counts.fits"
+      exposure_map="$expdir/$label/${detector}_exposure.fits"
+    fi
+    [[ -s "$counts_map" ]] && \
+      "$PYTHON" "$SCRIPT_DIR/tools.py" fits-png "$counts_map" "$qcdir/${label}_counts_mosaic.png" magma log "$expdir/grid.json" "$WORKDIR/clean" "$DETECTORS"
+    [[ -s "$exposure_map" ]] && \
+      "$PYTHON" "$SCRIPT_DIR/tools.py" fits-png "$exposure_map" "$qcdir/${label}_exposure_mosaic.png" viridis linear "$expdir/grid.json" "$WORKDIR/clean" "$DETECTORS"
     [[ -s "$expdir/$label/EPIC_rate.fits" ]] && \
-      "$PYTHON" "$SCRIPT_DIR/tools.py" fits-png "$expdir/$label/EPIC_rate.fits" "$qcdir/${label}_rate.png" magma log
+      "$PYTHON" "$SCRIPT_DIR/tools.py" fits-png "$expdir/$label/EPIC_rate.fits" "$qcdir/${label}_rate_mosaic.png" magma log "$expdir/grid.json" "$WORKDIR/clean" "$DETECTORS"
   done
 
   echo "Wrote $files"
   echo "Wrote $status"
+  echo "Wrote $qcdir/*_mosaic.png"
+}
+
+# ==============================================================================
+# Stage QC: background
+# ==============================================================================
+
+qc_background() {
+  local bgdir="$WORKDIR/background"
+  local qcdir="$WORKDIR/qc/background"
+  local files="$qcdir/output_files.txt"
+  local status="$qcdir/status.txt"
+  local summary="$qcdir/background_summary.tsv"
+  local detector label prefix first=1 exposure_map net_rate_map
+
+  [[ -d "$bgdir" ]] || { echo "Missing background output directory: $bgdir" >&2; exit 1; }
+  mkdir -p "$qcdir"
+  detector="$(single_detector)"
+
+  {
+    find "$bgdir" -maxdepth 3 \( -type f -o -type l \) | sort
+    [[ -d "$WORKDIR/logs" ]] && find "$WORKDIR/logs" -maxdepth 1 -type f -name 'background_*.log' | sort
+  } > "$files"
+
+  : > "$summary"
+  {
+    for label in $(image_band_labels); do
+      prefix="EPIC"
+      [[ -n "$detector" ]] && prefix="$detector"
+      for product in background net_counts; do
+        [[ -s "$bgdir/$label/${prefix}_${product}.fits" ]] && echo "$label/${prefix}_${product}.fits ok" || echo "$label/${prefix}_${product}.fits missing"
+      done
+      if [[ -s "$bgdir/$label/background_summary.tsv" ]]; then
+        if [[ "$first" == "1" ]]; then
+          cat "$bgdir/$label/background_summary.tsv" >> "$summary"
+          first=0
+        else
+          tail -n +2 "$bgdir/$label/background_summary.tsv" >> "$summary"
+        fi
+      else
+        echo "$label/background_summary.tsv missing"
+      fi
+    done
+  } > "$status"
+
+  rm -f "$qcdir"/*.png
+  for label in $(image_band_labels); do
+    prefix="EPIC"
+    [[ -n "$detector" ]] && prefix="$detector"
+    [[ -s "$bgdir/$label/${prefix}_background.fits" ]] && \
+      "$PYTHON" "$SCRIPT_DIR/tools.py" fits-png "$bgdir/$label/${prefix}_background.fits" "$qcdir/${label}_background_mosaic.png" viridis linear "$WORKDIR/exposure/grid.json" "$WORKDIR/clean" "$DETECTORS"
+    [[ -s "$bgdir/$label/${prefix}_net_counts.fits" ]] && \
+      "$PYTHON" "$SCRIPT_DIR/tools.py" fits-png "$bgdir/$label/${prefix}_net_counts.fits" "$qcdir/${label}_net_counts_mosaic.png" coolwarm signed "$WORKDIR/exposure/grid.json" "$WORKDIR/clean" "$DETECTORS"
+    exposure_map="$WORKDIR/exposure/$label/${prefix}_exposure.fits"
+    net_rate_map="$qcdir/${label}_net_rate.fits"
+    if [[ -s "$bgdir/$label/${prefix}_net_counts.fits" && -s "$exposure_map" ]]; then
+      "$PYTHON" "$SCRIPT_DIR/tools.py" net-rate "$bgdir/$label/${prefix}_net_counts.fits" "$exposure_map" "$net_rate_map"
+      "$PYTHON" "$SCRIPT_DIR/tools.py" fits-png "$net_rate_map" "$qcdir/${label}_net_rate_mosaic.png" plasma signed "$WORKDIR/exposure/grid.json" "$WORKDIR/clean" "$DETECTORS"
+    fi
+  done
+
+  echo "Wrote $files"
+  echo "Wrote $status"
+  echo "Wrote $summary"
+  echo "Wrote $qcdir/*_mosaic.png"
 }
 
 # ==============================================================================
@@ -235,6 +319,7 @@ case "$STAGE" in
   repro) qc_repro ;;
   clean) qc_clean ;;
   exposure) qc_exposure ;;
-  all) qc_init; qc_repro; qc_clean; qc_exposure ;;
+  background) qc_background ;;
+  all) qc_init; qc_repro; qc_clean; qc_exposure; qc_background ;;
   *) echo "Unknown QC stage: $STAGE" >&2; exit 2 ;;
 esac

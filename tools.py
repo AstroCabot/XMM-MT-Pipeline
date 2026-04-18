@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -97,6 +98,9 @@ def shell(path: str) -> None:
     emit("IMAGE_BIN_PHYS", cfg.get("image_bin_phys", 80))
     emit("IMAGE_PAD_FRAC", cfg.get("image_pad_frac", 0.08))
     emit("EEXPMAP_ATTREBIN", cfg.get("eexpmap_attrebin", "0.020626481"))
+    emit("BACKGROUND_COUNTS_QUANTILE", cfg.get("background_counts_quantile", 0.10))
+    emit("BACKGROUND_EXCLUDE_RADIUS_FRAC", cfg.get("background_exclude_radius_frac", 0.50))
+    emit("BACKGROUND_MIN_PIXELS", cfg.get("background_min_pixels", 100))
     emit("LINK_ODF_CONSTITUENTS", yesno(cfg.get("link_odf_constituents"), True))
     emit("SKIP_ODF_LINK_PATTERNS", "|".join(cfg.get("skip_odf_link_patterns", [])))
 
@@ -171,6 +175,37 @@ def valid_sky(x, y):
     return np.isfinite(x) & np.isfinite(y) & (np.abs(x) < 1.0e7) & (np.abs(y) < 1.0e7)
 
 
+def event_bounds(events: list[Path], extra_extent: tuple[float, float, float, float] | None = None):
+    import numpy as np
+
+    xmin = ymin = np.inf
+    xmax = ymax = -np.inf
+    for path in events:
+        hdul, x, y, _pi = event_columns(path)
+        good = valid_sky(x, y)
+        if np.any(good):
+            xmin = min(xmin, float(x[good].min()))
+            xmax = max(xmax, float(x[good].max()))
+            ymin = min(ymin, float(y[good].min()))
+            ymax = max(ymax, float(y[good].max()))
+        hdul.close()
+    if extra_extent:
+        xmin = min(xmin, extra_extent[0])
+        xmax = max(xmax, extra_extent[1])
+        ymin = min(ymin, extra_extent[2])
+        ymax = max(ymax, extra_extent[3])
+    if not np.isfinite([xmin, xmax, ymin, ymax]).all() or xmin == xmax or ymin == ymax:
+        die("Could not determine a valid mosaic extent from event lists")
+
+    data_bounds = (xmin, xmax, ymin, ymax)
+    pad_x = max(0.08 * (xmax - xmin), 500.0)
+    pad_y = max(0.08 * (ymax - ymin), 500.0)
+    extent = (xmin - pad_x, xmax + pad_x, ymin - pad_y, ymax + pad_y)
+    nx = 900
+    ny = max(200, int(round(nx * (extent[3] - extent[2]) / (extent[1] - extent[0]))))
+    return data_bounds, extent, nx, min(ny, 1200)
+
+
 def fits_rows(path_arg: str) -> None:
     try:
         from astropy.io import fits
@@ -239,6 +274,91 @@ def exposure_grid(outdir_arg: str, bin_phys_arg: str, pad_frac_arg: str, event_a
     )
 
 
+def event_time_info(path: Path) -> tuple[float, float, str]:
+    from astropy.io import fits
+
+    with fits.open(path, memmap=True) as hdul:
+        header = (hdul["EVENTS"] if "EVENTS" in hdul else hdul[1]).header
+        start = header.get("TSTART")
+        stop = header.get("TSTOP")
+        source = header.get("EXPIDSTR") or path.stem.split("_")[-2]
+    if start is None or stop is None:
+        die(f"Missing TSTART/TSTOP in {path}")
+    return float(start), float(stop), str(source)
+
+
+def clean_groups(clean_dir_arg: str) -> dict[str, list[tuple[float, float, str, Path]]]:
+    groups: dict[str, list[tuple[float, float, str, Path]]] = {}
+    for manifest in sorted(Path(clean_dir_arg).glob("*_clean_files.txt")):
+        inst = manifest.name.removesuffix("_clean_files.txt")
+        rows = []
+        for line in manifest.read_text(encoding="utf-8").splitlines():
+            path = Path(line.strip())
+            if path.is_file():
+                start, stop, source = event_time_info(path)
+                rows.append((start, stop, source, path))
+        if rows:
+            groups[inst] = sorted(rows)
+    return groups
+
+
+def odf_groups(init_dir_arg: str) -> dict[str, list[tuple[float, float, str, Path]]]:
+    from astropy.io import fits
+    from astropy.time import Time
+
+    init_dir = Path(init_dir_arg)
+    epoch = Time("1998-01-01T00:00:00", scale="tt")
+    groups: dict[str, list[tuple[float, float, str, Path]]] = {}
+    for path in sorted(init_dir.glob("*.FIT")):
+        match = re.search(r"_((?:M[12])|PN)([SU]\d{3})00AUX\.FIT$", path.name)
+        if not match:
+            continue
+        inst, source = match.groups()
+        with fits.open(path, memmap=True) as hdul:
+            header = hdul[1].header
+            if "DATE-OBS" not in header or "DATE-END" not in header:
+                continue
+            start = (Time(header["DATE-OBS"], scale="utc").tt - epoch).sec
+            stop = (Time(header["DATE-END"], scale="utc").tt - epoch).sec
+        groups.setdefault(inst, []).append((float(start), float(stop), source, path))
+    return {inst: sorted(rows) for inst, rows in groups.items()}
+
+
+def exposure_slices(
+    slices_arg: str,
+    pointings_arg: str,
+    clean_dir_arg: str,
+    detectors_arg: str,
+    init_dir_arg: str = "",
+) -> None:
+    groups = clean_groups(clean_dir_arg)
+    ref_groups = (odf_groups(init_dir_arg) | groups) if init_dir_arg else groups
+    if not groups:
+        die(f"No clean event manifests found in {clean_dir_arg}")
+
+    order = {"M2": 0, "M1": 1, "PN": 2}
+    ref_inst = sorted(ref_groups, key=lambda item: (-len(ref_groups[item]), order.get(item, 9), item))[0]
+    pointings = [(f"P{i:03d}", *row[:3]) for i, row in enumerate(ref_groups[ref_inst], 1)]
+
+    Path(pointings_arg).write_text(
+        "pointing\tstart\tstop\treference_detector\treference_exposure\n"
+        + "".join(f"{pid}\t{start:.6f}\t{stop:.6f}\t{ref_inst}\t{source}\n" for pid, start, stop, source in pointings),
+        encoding="utf-8",
+    )
+
+    lines = ["inst\tevent\tbase\tpointing\tstart\tstop\treference_exposure\n"]
+    for inst in normalize_detectors(detectors_arg):
+        for event_start, event_stop, _event_source, path in groups.get(inst, []):
+            stem = path.name.removesuffix(".fits")
+            for pid, point_start, point_stop, point_source in pointings:
+                start = max(event_start, point_start)
+                stop = min(event_stop, point_stop)
+                if stop - start > 1.0:
+                    base = f"{stem}_{pid}_{point_source}"
+                    lines.append(f"{inst}\t{path}\t{base}\t{pid}\t{start:.6f}\t{stop:.6f}\t{point_source}\n")
+    Path(slices_arg).write_text("".join(lines), encoding="utf-8")
+
+
 def combine_maps(out_counts_arg: str, out_exposure_arg: str, out_rate_arg: str, inputs: list[str]) -> None:
     import numpy as np
     from astropy.io import fits
@@ -267,7 +387,124 @@ def combine_maps(out_counts_arg: str, out_exposure_arg: str, out_rate_arg: str, 
     fits.PrimaryHDU(rate, header).writeto(out_rate_arg, overwrite=True)
 
 
-def fits_png(fits_arg: str, png_arg: str, cmap_arg: str = "viridis", scale_arg: str = "linear") -> None:
+def background_map(args: list[str]) -> None:
+    import numpy as np
+    from astropy.io import fits
+
+    if len(args) != 11:
+        die("background-map expects COUNTS EXPOSURE BACKGROUND NET COUNTS_QUANTILE MINPIX EXCLUDE_FRAC SUMMARY BAND INST SOURCE")
+    counts_path, exp_path, out_bkg, out_net, quantile, minpix, exclude_frac, summary, band, inst, source = args
+    counts, header = fits.getdata(counts_path, header=True)
+    exposure = fits.getdata(exp_path).astype(float)
+    if counts.shape != exposure.shape:
+        die(f"Shape mismatch: {counts_path} vs {exp_path}")
+
+    counts = np.asarray(counts, dtype=float)
+    q = float(quantile)
+    if not 0.0 <= q <= 1.0:
+        die(f"Background quantile must be between 0 and 1: {q}")
+
+    status = "ok"
+    footprint_pixels = estimate_pixels = positive_pixels = level = 0.0
+    cx = cy = detector_radius = exclude_radius = np.nan
+    background = np.zeros_like(counts, dtype=float)
+    footprint = np.isfinite(exposure) & (exposure > 0)
+    net = np.full_like(counts, np.nan, dtype=float)
+
+    footprint_pixels = int(footprint.sum())
+    if footprint_pixels < int(minpix):
+        status = "zero_exposure" if footprint_pixels == 0 else "low_footprint"
+    else:
+        yy, xx = np.indices(footprint.shape)
+        sy, sx = np.nonzero(footprint)
+        cx = float(sx.mean())
+        cy = float(sy.mean())
+        footprint_r = np.hypot(sx - cx, sy - cy)
+        detector_radius = float(np.percentile(footprint_r, 99.5))
+        exclude_radius = float(exclude_frac) * detector_radius
+        estimate = footprint & (np.hypot(xx - cx, yy - cy) >= exclude_radius)
+        estimate_pixels = int(estimate.sum())
+        if estimate_pixels < int(minpix):
+            status = "low_estimate"
+        else:
+            values = counts[estimate]
+            values = values[np.isfinite(values) & (values > 0)]
+            positive_pixels = int(values.size)
+            if positive_pixels < int(minpix):
+                status = "low_counts"
+            else:
+                level = float(np.quantile(values, q))
+                background = np.where(footprint, level, 0.0)
+                net = np.where(footprint, counts - background, np.nan)
+
+    header["BUNIT"] = "count"
+    fits.PrimaryHDU(background, header).writeto(out_bkg, overwrite=True)
+    fits.PrimaryHDU(net, header).writeto(out_net, overwrite=True)
+
+    row = (
+        f"{band}\t{inst}\t{source}\t{status}\t{footprint_pixels}\t{estimate_pixels}\t{positive_pixels}\t"
+        f"{q:.4g}\t{level:.8g}\t{cx:.3f}\t{cy:.3f}\t"
+        f"{detector_radius:.3f}\t{exclude_radius:.3f}\n"
+    )
+    path = Path(summary)
+    if not path.exists():
+        path.write_text(
+            "band\tinst\tsource\tstatus\tfootprint_pixels\testimate_pixels\tpositive_pixels\tcounts_quantile\t"
+            "background_per_pixel\tcenter_x_px\tcenter_y_px\t"
+            "detector_radius_px\texclude_radius_px\n",
+            encoding="utf-8",
+        )
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(row)
+
+
+def combine_background(args: list[str]) -> None:
+    import numpy as np
+    from astropy.io import fits
+
+    if len(args) < 4 or len(args[2:]) % 2:
+        die("combine-background expects OUT_BACKGROUND OUT_NET BACKGROUND NET...")
+    out_bkg, out_net = args[:2]
+    pairs = [(Path(args[i]), Path(args[i + 1])) for i in range(2, len(args), 2)]
+    background_sum = net_sum = valid = None
+    header = None
+    for bkg_path, net_path in pairs:
+        background, next_header = fits.getdata(bkg_path, header=True)
+        background = background.astype(float)
+        net = fits.getdata(net_path).astype(float)
+        finite = np.isfinite(net)
+        header = next_header if header is None else header
+        background_sum = background if background_sum is None else background_sum + background
+        net_sum = np.where(finite, net, 0.0) if net_sum is None else net_sum + np.where(finite, net, 0.0)
+        valid = finite if valid is None else valid | finite
+
+    net = np.where(valid, net_sum, np.nan)
+    header["BUNIT"] = "count"
+    fits.PrimaryHDU(background_sum, header).writeto(out_bkg, overwrite=True)
+    fits.PrimaryHDU(net, header).writeto(out_net, overwrite=True)
+
+
+def net_rate(net_arg: str, exposure_arg: str, out_arg: str) -> None:
+    import numpy as np
+    from astropy.io import fits
+
+    net, header = fits.getdata(net_arg, header=True)
+    exposure = fits.getdata(exposure_arg).astype(float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rate = np.where(exposure > 0, net.astype(float) / exposure, np.nan)
+    header["BUNIT"] = "count / s"
+    fits.PrimaryHDU(rate, header).writeto(out_arg, overwrite=True)
+
+
+def fits_png(
+    fits_arg: str,
+    png_arg: str,
+    cmap_arg: str = "viridis",
+    scale_arg: str = "linear",
+    grid_arg: str = "",
+    manifest_arg: str = "",
+    detectors_arg: str = "PN",
+) -> None:
     import matplotlib
     import numpy as np
     from astropy.io import fits
@@ -277,15 +514,22 @@ def fits_png(fits_arg: str, png_arg: str, cmap_arg: str = "viridis", scale_arg: 
     import matplotlib.pyplot as plt
 
     data = np.asarray(fits.getdata(fits_arg), dtype=float)
+    ny, nx = data.shape
+    image_extent = (0.0, float(nx), 0.0, float(ny))
+    plot_extent = image_extent
+    if grid_arg and manifest_arg:
+        grid = json.loads(Path(grid_arg).read_text(encoding="utf-8"))
+        image_extent = (grid["x_min"], grid["x_max"], grid["y_min"], grid["y_max"])
+        _bounds, plot_extent, _nx, _ny = event_bounds(manifest_events(manifest_arg, detectors_arg), image_extent)
+
     finite = np.isfinite(data)
     positive = data[finite & (data > 0)]
+    image = np.ma.masked_where(~finite | (data <= 0), data)
     cmap = plt.get_cmap(cmap_arg).copy()
     cmap.set_bad("black")
     cmap.set_under("black")
-
     norm = None
     vmin = vmax = None
-    image = np.ma.masked_where(~finite | (data <= 0), data)
     if scale_arg == "log" and positive.size:
         vmin = max(float(np.percentile(positive, 1.0)), np.finfo(float).tiny)
         vmax = max(float(np.percentile(positive, 99.7)), vmin * 1.01)
@@ -296,10 +540,21 @@ def fits_png(fits_arg: str, png_arg: str, cmap_arg: str = "viridis", scale_arg: 
         vmax = float(np.percentile(positive, 99.7))
         if vmax <= vmin:
             vmax = float(positive.max())
+    if scale_arg == "signed":
+        finite_values = data[finite]
+        span = float(np.nanpercentile(np.abs(finite_values), 99.0)) if finite_values.size else 1.0
+        span = span if span > 0 else 1.0
+        image = np.ma.masked_where(~finite, data)
+        norm = None
+        vmin = -span
+        vmax = span
 
-    ny, nx = data.shape
-    fig, ax = plt.subplots(figsize=(8, 8 * ny / nx), constrained_layout=True)
-    ax.imshow(image, origin="lower", cmap=cmap, norm=norm, vmin=vmin, vmax=vmax, interpolation="nearest")
+    ratio = (plot_extent[3] - plot_extent[2]) / max(plot_extent[1] - plot_extent[0], 1.0)
+    fig, ax = plt.subplots(figsize=(8, max(3, 8 * ratio)), constrained_layout=True)
+    ax.imshow(image, origin="lower", extent=image_extent, cmap=cmap, norm=norm, vmin=vmin, vmax=vmax, interpolation="nearest")
+    ax.set_xlim(plot_extent[0], plot_extent[1])
+    ax.set_ylim(plot_extent[2], plot_extent[3])
+    ax.set_aspect("equal", adjustable="box")
     ax.set_axis_off()
     Path(png_arg).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(png_arg, dpi=180, facecolor="black", pad_inches=0.05)
@@ -319,31 +574,7 @@ def event_mosaic(manifest_dir: str, outdir: str, detectors_arg: str = "PN") -> N
     if not events:
         die(f"No event lists found in {manifest_dir}")
 
-    xmin = ymin = np.inf
-    xmax = ymax = -np.inf
-    for path in events:
-        hdul, x, y, _pi = event_columns(path)
-        good = valid_sky(x, y)
-        if np.any(good):
-            xg = x[good]
-            yg = y[good]
-            bounds = (float(xg.min()), float(xg.max()), float(yg.min()), float(yg.max()))
-            xmin = min(xmin, bounds[0])
-            xmax = max(xmax, bounds[1])
-            ymin = min(ymin, bounds[2])
-            ymax = max(ymax, bounds[3])
-        hdul.close()
-
-    if not np.isfinite([xmin, xmax, ymin, ymax]).all() or xmin == xmax or ymin == ymax:
-        die("Could not determine a valid mosaic extent from repro event lists")
-
-    data_bounds = (xmin, xmax, ymin, ymax)
-    pad_x = max(0.08 * (xmax - xmin), 500.0)
-    pad_y = max(0.08 * (ymax - ymin), 500.0)
-    extent = (xmin - pad_x, xmax + pad_x, ymin - pad_y, ymax + pad_y)
-    nx = 900
-    ny = max(200, int(round(nx * (extent[3] - extent[2]) / (extent[1] - extent[0]))))
-    ny = min(ny, 1200)
+    data_bounds, extent, nx, ny = event_bounds(events)
 
     bands = {"soft_lt1kev": (None, 1000, "magma"), "hard_gt1kev": (1000, None, "viridis")}
     out = Path(outdir)
@@ -415,13 +646,33 @@ def main(argv: list[str]) -> int:
     if len(argv) >= 6 and argv[1] == "exposure-grid":
         exposure_grid(argv[2], argv[3], argv[4], argv[5:])
         return 0
+    if len(argv) in {6, 7} and argv[1] == "exposure-slices":
+        exposure_slices(argv[2], argv[3], argv[4], argv[5], argv[6] if len(argv) == 7 else "")
+        return 0
     if len(argv) >= 7 and argv[1] == "combine-maps":
         combine_maps(argv[2], argv[3], argv[4], argv[5:])
         return 0
-    if len(argv) in {4, 5, 6} and argv[1] == "fits-png":
-        fits_png(argv[2], argv[3], argv[4] if len(argv) >= 5 else "viridis", argv[5] if len(argv) >= 6 else "linear")
+    if len(argv) == 13 and argv[1] == "background-map":
+        background_map(argv[2:])
         return 0
-    die("Usage: tools.py shell CONFIG | rewrite-path SUM.SAS PATH | event-mosaic MANIFEST OUTDIR [DETECTORS] | fits-rows FITS | exposure-grid OUTDIR BIN PAD EVENTS... | combine-maps OUT_COUNTS OUT_EXP OUT_RATE COUNTS EXP... | fits-png FITS PNG [CMAP] [linear|log]")
+    if len(argv) >= 6 and argv[1] == "combine-background":
+        combine_background(argv[2:])
+        return 0
+    if len(argv) == 5 and argv[1] == "net-rate":
+        net_rate(argv[2], argv[3], argv[4])
+        return 0
+    if 4 <= len(argv) <= 9 and argv[1] == "fits-png":
+        fits_png(
+            argv[2],
+            argv[3],
+            argv[4] if len(argv) >= 5 else "viridis",
+            argv[5] if len(argv) >= 6 else "linear",
+            argv[6] if len(argv) >= 7 else "",
+            argv[7] if len(argv) >= 8 else "",
+            argv[8] if len(argv) >= 9 else "PN",
+        )
+        return 0
+    die("Usage: tools.py shell CONFIG | rewrite-path SUM.SAS PATH | event-mosaic MANIFEST OUTDIR [DETECTORS] | fits-rows FITS | exposure-grid OUTDIR BIN PAD EVENTS... | exposure-slices SLICES_TSV POINTINGS_TSV CLEAN_DIR DETECTORS [INIT_DIR] | combine-maps OUT_COUNTS OUT_EXP OUT_RATE COUNTS EXP... | background-map COUNTS EXPOSURE BACKGROUND NET COUNTS_QUANTILE MINPIX EXCLUDE_FRAC SUMMARY BAND INST SOURCE | combine-background OUT_BACKGROUND OUT_NET BACKGROUND NET... | net-rate NET EXPOSURE OUT | fits-png FITS PNG [CMAP] [linear|log|signed] [GRID_JSON MANIFEST DETECTORS]")
 
 
 if __name__ == "__main__":

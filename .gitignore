@@ -1,3 +1,4 @@
 output/
 *.fits
 *.ds
+__pycache__

@@ -196,19 +196,27 @@ Purpose:
 What it does:
 
   1. Sources output/sas_setup.env and output/attitude.env.
-  2. Builds one shared SKY grid from the selected merged clean event lists.
-  3. For each configured band, runs evselect to make selected-detector counts
-     images.
-  4. Runs eexpmap on those images using output/repro/atthk.dat.
-  5. Combines available selected-detector counts and exposure maps into EPIC
-     maps.
+  2. Builds one shared SKY grid from the selected clean event lists.
+  3. Writes pointings.tsv and slices.tsv. The reference detector is the
+     available detector with the most exposure windows. Cleaned detector
+     timelines are used when present; otherwise the raw ODF AUX headers in
+     output/init provide the pointing windows.
+  4. For each configured band, selected detector, and pointing slice, runs
+     evselect and eexpmap to make counts/exposure images.
+  5. Combines per-slice counts and exposure maps into detector maps.
+  6. Combines available detector maps into EPIC maps.
 
 Outputs:
 
   output/exposure/grid.env
   output/exposure/grid.json
+  output/exposure/pointings.tsv
+  output/exposure/slices.tsv
+  output/exposure/soft/PN/<event>_<pointing>_counts.fits
+  output/exposure/soft/PN/<event>_<pointing>_exposure.fits
   output/exposure/soft/PN_counts.fits
   output/exposure/soft/PN_exposure.fits
+  output/exposure/soft/PN_rate.fits
   output/exposure/soft/EPIC_counts.fits
   output/exposure/soft/EPIC_exposure.fits
   output/exposure/soft/EPIC_rate.fits
@@ -225,14 +233,67 @@ QC:
 QC outputs:
 
   output/qc/exposure/output_files.txt
-  output/qc/exposure/status.txt
-  output/qc/exposure/soft_exposure.png
-  output/qc/exposure/soft_rate.png
-  output/qc/exposure/hard_exposure.png
-  output/qc/exposure/hard_rate.png
+  output/qc/exposure/status.txt, including pointing and slice counts
+  output/qc/exposure/soft_counts_mosaic.png
+  output/qc/exposure/soft_exposure_mosaic.png
+  output/qc/exposure/soft_rate_mosaic.png
+  output/qc/exposure/hard_counts_mosaic.png
+  output/qc/exposure/hard_exposure_mosaic.png
+  output/qc/exposure/hard_rate_mosaic.png
 
 The default bands are soft=200-999 eV and hard=1001-12000 eV, matching the
 PI < 1 keV and PI > 1 keV quick-look split without double-counting PI=1000.
+
+
+Stage: background
+-----------------
+
+Purpose:
+
+  Build a first-pass constant background approximation in counts space. The
+  estimate is made per pointing slice before maps are combined.
+
+What it does:
+
+  1. Uses the per-pointing counts/exposure maps from the exposure stage.
+  2. Uses positive exposure pixels as the detector footprint.
+  3. Estimates one constant counts-per-pixel background from the
+     background_counts_quantile of positive footprint counts outside
+     background_exclude_radius_frac times the detector radius.
+  4. Writes per-pointing, per-detector, and EPIC background/net-count maps.
+
+Outputs:
+
+  output/background/soft/PN/<event>_<pointing>_background.fits
+  output/background/soft/PN/<event>_<pointing>_net_counts.fits
+  output/background/soft/PN_background.fits
+  output/background/soft/PN_net_counts.fits
+  output/background/soft/EPIC_background.fits
+  output/background/soft/EPIC_net_counts.fits
+  output/background/soft/background_summary.tsv
+  output/background/hard/<same pattern>
+
+Run it:
+
+  ./pipeline.sh background
+
+QC:
+
+  ./qc.sh background
+
+QC outputs:
+
+  output/qc/background/output_files.txt
+  output/qc/background/status.txt
+  output/qc/background/background_summary.tsv
+  output/qc/background/soft_background_mosaic.png
+  output/qc/background/soft_net_counts_mosaic.png
+  output/qc/background/soft_net_rate.fits
+  output/qc/background/soft_net_rate_mosaic.png
+  output/qc/background/hard_background_mosaic.png
+  output/qc/background/hard_net_counts_mosaic.png
+  output/qc/background/hard_net_rate.fits
+  output/qc/background/hard_net_rate_mosaic.png
 
 
 Configuration
@@ -253,6 +314,7 @@ config.json currently defines:
   image_bands
   image_bin_phys / image_pad_frac
   eexpmap_attrebin
+  background_counts_quantile / background_exclude_radius_frac / background_min_pixels
   link_odf_constituents / skip_odf_link_patterns
 
 sas_setup_script should point to the SAS setsas.sh file. If it is blank, the

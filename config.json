@@ -18,6 +18,9 @@
   "image_bin_phys": 80,
   "image_pad_frac": 0.08,
   "eexpmap_attrebin": "0.020626481",
+  "background_counts_quantile": 0.10,
+  "background_exclude_radius_frac": 0.50,
+  "background_min_pixels": 100,
 
   "link_odf_constituents": true,
   "skip_odf_link_patterns": [
