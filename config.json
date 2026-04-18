@@ -1,0 +1,28 @@
+{
+  "workdir": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Cambridge/X3I/reduction_v6/output",
+  "odfdir": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/ODF",
+
+  "shortlink_name": "c2025n1_v6",
+  "keep_shortlink": true,
+  "shortlink_max_path": 60,
+
+  "sas_setup_script": "/home/scabot/Programs/sas/xmmsas_22.1.0-a8f2c2afa-20250304/setsas.sh",
+  "sas_ccfpath": "",
+  "sas_verbosity": "4",
+  "detectors": "PN",
+  "ahf_input": "",
+  "clean_pi_min": 200,
+  "clean_pi_max": 12000,
+  "premerge_image_size_deg": 1.5,
+  "image_bands": "soft:200:999;hard:1001:12000",
+  "image_bin_phys": 80,
+  "image_pad_frac": 0.08,
+  "eexpmap_attrebin": "0.020626481",
+
+  "link_odf_constituents": true,
+  "skip_odf_link_patterns": [
+    "*.gz.gpg",
+    "*.tar.gz",
+    "*.tar"
+  ]
+}
