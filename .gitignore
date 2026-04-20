@@ -2,3 +2,4 @@ output/
 *.fits
 *.ds
 __pycache__
+old/

@@ -12,44 +12,40 @@ STAGE="init"
 FORCE=0
 PRINT_ENV=0
 NO_SHORTLINK=0
+RUN_QC=0
 
 usage() {
   cat <<'EOF'
-Usage: ./pipeline.sh [init|repro|clean|exposure|background|all|env] [--config FILE] [--force] [--print-env] [--no-shortlink]
+Usage: ./pipeline.sh [stage] [--config FILE] [--force] [--qc] [--print-env] [--no-shortlink]
 
 Stages:
-  init         Prepare the SAS ODF state used by all later stages:
-                 output/init/ccf.cif
-                 output/init/*SUM.SAS
-                 output/init/<raw ODF symlinks>
-                 output/sas_setup.env
-
-  repro        Run epproc/emproc and create attitude products.
-
-  clean        Apply standard EPIC event-quality and energy cuts.
-
-  exposure     Build soft/hard EPIC counts, exposure, and rate maps.
-
-  background   Build per-pointing quantile background maps.
-
-  all          Run every implemented science-production stage in order.
-
-  env          Print output/sas_setup.env after init has run.
+  init        Prepare SAS ODF state.
+  repro       Run epproc/emproc and create attitude products.
+  clean       Apply EPIC quality, PI, and fixed high-energy flare-GTI cuts.
+  exposure    Build counts, exposure, and rate maps.
+  all         Run all implemented production stages.
+  qc-init     QC init outputs.
+  qc-repro    QC repro outputs.
+  qc-clean    QC clean outputs.
+  qc-exposure QC exposure outputs.
+  qc          Run all QC stages.
+  env         Print output/sas_setup.env.
 
 Options:
-  --config     JSON config file. Default: ./config.json
-  --force      Rebuild init products.
-  --print-env  Print the saved SAS environment after init.
-  --no-shortlink
-               Use the configured workdir directly instead of a /tmp shortlink.
+  --config FILE   JSON config file. Default: ./config.json
+  --force         Rebuild stage products.
+  --qc            Run matching QC after the requested production stage.
+  --print-env     Print saved SAS environment after init.
+  --no-shortlink  Use configured workdir instead of a /tmp shortlink.
 EOF
 }
 
 while (($#)); do
   case "$1" in
-    init|repro|clean|exposure|background|all|env) STAGE="$1"; shift ;;
+    init|repro|clean|exposure|all|qc-init|qc-repro|qc-clean|qc-exposure|qc|env) STAGE="$1"; shift ;;
     --config|-c) CONFIG="$2"; shift 2 ;;
     --force|-f) FORCE=1; shift ;;
+    --qc) RUN_QC=1; shift ;;
     --print-env) PRINT_ENV=1; shift ;;
     --no-shortlink) NO_SHORTLINK=1; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -91,10 +87,12 @@ REAL_INITDIR="$REAL_WORKDIR/init"
 REPRODIR="$WORKDIR/repro"
 REAL_REPRODIR="$REAL_WORKDIR/repro"
 CLEANDIR="$WORKDIR/clean"
+GTIDIR="$CLEANDIR/gti"
+LIGHTCURVEDIR="$CLEANDIR/lightcurves"
+GTI_SUMMARY="$CLEANDIR/flare_gti_summary.tsv"
 EXPOSUREDIR="$WORKDIR/exposure"
-BACKGROUNDDIR="$WORKDIR/background"
 LOGDIR="$WORKDIR/logs"
-mkdir -p "$INITDIR" "$REPRODIR" "$CLEANDIR" "$EXPOSUREDIR" "$BACKGROUNDDIR" "$LOGDIR"
+mkdir -p "$INITDIR" "$REPRODIR" "$CLEANDIR" "$EXPOSUREDIR" "$LOGDIR"
 
 # ==============================================================================
 # Logging and SAS environment setup
@@ -167,14 +165,7 @@ set_sas_clean_env() {
 # ==============================================================================
 # Stage: init
 #
-# Purpose:
-#   Create the initial SAS products expected by downstream reduction stages.
-#
-# Outputs:
-#   output/init/ccf.cif
-#   output/init/*SUM.SAS
-#   output/init/<symlinks to raw ODF constituents>
-#   output/sas_setup.env
+# Create ccf.cif, *SUM.SAS, ODF symlinks, and sas_setup.env.
 # ==============================================================================
 
 mirror_odf_into_init() {
@@ -256,14 +247,7 @@ stage_init() {
 # ==============================================================================
 # Stage: repro
 #
-# Purpose:
-#   Reprocess EPIC ODF data into calibrated event lists and attitude products.
-#
-# Outputs:
-#   output/repro/*ImagingEvts.ds
-#   output/repro/manifest/PN_raw.txt, M1_raw.txt, M2_raw.txt
-#   output/repro/atthk.dat
-#   output/attitude.env
+# Reprocess EPIC data and write raw manifests, atthk.dat, and attitude.env.
 # ==============================================================================
 
 write_manifest() {
@@ -353,13 +337,7 @@ stage_repro() {
 # ==============================================================================
 # Stage: clean
 #
-# Purpose:
-#   Apply standard EPIC event-quality and PI cuts, without espfilt.
-#
-# Outputs:
-#   output/clean/<inst>/*.clean.fits
-#   output/clean/<inst>_clean_files.txt
-#   output/clean/<inst>_clean_merged.fits
+# Apply EPIC event-quality, PI, and optional fixed high-energy flare-GTI cuts.
 # ==============================================================================
 
 clean_expr() {
@@ -369,6 +347,41 @@ clean_expr() {
   else
     echo "#XMMEA_EM&&(PATTERN<=12)&&(PI in [$CLEAN_PI_MIN:$CLEAN_PI_MAX])"
   fi
+}
+
+clean_gti_enabled() {
+  is_yes "${CLEAN_GTI_ENABLED:-yes}"
+}
+
+flare_lc_expr() {
+  local inst="$1" qual
+  if [[ "$inst" == "PN" ]]; then
+    qual="FLAG==0"
+  else
+    qual="#XMMEA_EM"
+  fi
+  echo "(PATTERN<=$CLEAN_GTI_PATTERN_MAX)&&(PI in [$CLEAN_GTI_PI_MIN:$CLEAN_GTI_PI_MAX])&&($qual)"
+}
+
+build_flare_gti() {
+  local inst="$1" evt="$2" base="$3"
+  local lc gti expr
+  mkdir -p "$LIGHTCURVEDIR/$inst" "$GTIDIR/$inst"
+
+  lc="$LIGHTCURVEDIR/$inst/${base}_flare_lc.fits"
+  gti="$GTIDIR/$inst/${base}_flare_gti.fits"
+  if [[ "$FORCE" == "1" || ! -s "$gti" ]]; then
+    expr="$(flare_lc_expr "$inst")"
+    runlog "lc_${inst}_${base}" \
+      evselect table="${evt}:EVENTS" withrateset=yes rateset="$lc" \
+        maketimecolumn=yes timecolumn=TIME timebinsize="$CLEAN_GTI_TIMEBIN" \
+        makeratecolumn=yes expression="$expr"
+    runlog "gti_${inst}_${base}" \
+      tabgtigen table="${lc}:RATE" gtiset="$gti" expression="RATE <= $CLEAN_GTI_RATE_CUT"
+  fi
+
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$inst" "$base" "$CLEAN_GTI_RATE_CUT" "$CLEAN_GTI_TIMEBIN" "$CLEAN_GTI_PI_MIN" "$CLEAN_GTI_PI_MAX" "$lc" "$gti" >> "$GTI_SUMMARY"
+  CLEAN_GTI_RESULT="$gti"
 }
 
 merge_pairwise() {
@@ -401,11 +414,21 @@ clean_one_event() {
   local inst="$1"
   local evt="$2"
   local outfile="$3"
-  local expr
+  local expr base
   expr="$(clean_expr "$inst")"
 
   if [[ "$FORCE" != "1" && -s "$outfile" ]]; then
     return 0
+  fi
+
+  base="$(basename "$outfile")"
+  base="${base%.fits}"
+  base="${base%_clean}"
+  base="${base%.clean}"
+  if clean_gti_enabled; then
+    CLEAN_GTI_RESULT=""
+    build_flare_gti "$inst" "$evt" "$base"
+    expr="($expr)&&gti($CLEAN_GTI_RESULT,TIME)"
   fi
 
   runlog "clean_${inst}_$(basename "${outfile%.fits}")" \
@@ -425,57 +448,48 @@ clean_one_event() {
 
 write_clean_manifest() {
   local inst="$1"
-  find "$CLEANDIR/$inst" -maxdepth 1 -type f -name '*.clean.fits' | sort > "$CLEANDIR/${inst}_clean_files.txt"
+  mkdir -p "$CLEANDIR/manifest"
+  find "$CLEANDIR/events/$inst" -maxdepth 1 -type f -name '*_clean.fits' | sort > "$CLEANDIR/manifest/${inst}_clean_files.txt"
 }
 
 stage_clean() {
+  if [[ "$FORCE" != "1" ]] && clean_stage_complete; then
+    echo "Skipping clean; found existing clean products in $REAL_WORKDIR/clean"
+    return 0
+  fi
+
   set_sas_clean_env
   need_cmd evselect
   need_cmd attcalc
-  need_cmd merge
+  clean_gti_enabled && need_cmd tabgtigen
 
-  local inst rawlist evt base outfile merged
+  if clean_gti_enabled; then
+    mkdir -p "$GTIDIR"
+    printf 'inst\tevent\trate_cut_ct_s\ttimebin_s\tpi_min\tpi_max\tlightcurve\tgti\n' > "$GTI_SUMMARY"
+  fi
+
+  local inst rawlist evt base outfile
   for inst in $DETECTORS; do
     rawlist="$REPRODIR/manifest/${inst}_raw.txt"
     [[ -s "$rawlist" ]] || continue
-    mkdir -p "$CLEANDIR/$inst"
+    mkdir -p "$CLEANDIR/events/$inst" "$CLEANDIR/manifest"
 
     while IFS= read -r evt; do
       [[ -n "$evt" ]] || continue
       base="$(basename "$evt")"
       base="${base%.*}"
-      outfile="$CLEANDIR/$inst/${base}.clean.fits"
+      outfile="$CLEANDIR/events/$inst/${base}_clean.fits"
       clean_one_event "$inst" "$evt" "$outfile"
     done < "$rawlist"
 
     write_clean_manifest "$inst"
-    mapfile -t clean_files < "$CLEANDIR/${inst}_clean_files.txt"
-    [[ ${#clean_files[@]} -gt 0 ]] || continue
-
-    merged="$CLEANDIR/${inst}_clean_merged.fits"
-    if [[ "$FORCE" == "1" || ! -s "$merged" ]]; then
-      merge_pairwise "$merged" "${clean_files[@]}"
-      attcalc eventset="$merged" attitudelabel=ahf refpointlabel=pnt withatthkset=yes atthkset="$ATTHKGEN_FILE"
-    fi
   done
 }
 
 # ==============================================================================
 # Stage: exposure
 #
-# Purpose:
-#   Build matched EPIC counts, exposure, and count-rate maps from cleaned events.
-#
-# Outputs:
-#   output/exposure/grid.env, grid.json
-#   output/exposure/pointings.tsv, slices.tsv
-#   output/exposure/<band>/<inst>/<event>_<pointing>_counts.fits
-#   output/exposure/<band>/<inst>/<event>_<pointing>_exposure.fits
-#   output/exposure/<band>/<inst>_counts.fits
-#   output/exposure/<band>/<inst>_exposure.fits
-#   output/exposure/<band>/EPIC_counts.fits
-#   output/exposure/<band>/EPIC_exposure.fits
-#   output/exposure/<band>/EPIC_rate.fits
+# Build ODF-pointing counts, exposure, and rate maps from cleaned events.
 # ==============================================================================
 
 image_band_lines() {
@@ -492,22 +506,94 @@ image_band_lines() {
   done
 }
 
+band_count_expr() {
+  local label="$1" pimin="$2" pimax="$3" start="$4" stop="$5"
+  local time_expr="(TIME>=$start)&&(TIME<=$stop)"
+  case "$label" in
+    1000)
+      echo "$time_expr&&(RAWY>=13)&&(PATTERN==0)&&(PI in [201:500])&&((FLAG & 0x2fb002c)==0)"
+      ;;
+    2000)
+      echo "$time_expr&&(RAWY>=13)&&(PATTERN<=4)&&(PI in [501:1000])&&((FLAG & 0x2fb002c)==0)"
+      ;;
+    3000)
+      echo "$time_expr&&(RAWY>=13)&&(PATTERN<=4)&&(PI in [1001:2000])&&((FLAG & 0x2fb0024)==0)"
+      ;;
+    4000)
+      echo "$time_expr&&(RAWY>=13)&&(PATTERN<=4)&&(PI in [2001:4500])&&((FLAG & 0x2fb0024)==0)"
+      ;;
+    5000)
+      echo "$time_expr&&(RAWY>=13)&&(PATTERN<=4)&&((PI in [4501:7800])||(PI in [8201:12000]))&&((FLAG & 0x2fb0024)==0)"
+      ;;
+    *)
+      echo "$time_expr&&(PI in [$pimin:$pimax])"
+      ;;
+  esac
+}
+
+band_exposure_ref_expr() {
+  local label="$1" start="$2" stop="$3"
+  local time_expr="(TIME>=$start)&&(TIME<=$stop)"
+  case "$label" in
+    1000|2000)
+      echo "$time_expr&&(RAWY>=13)&&((FLAG & 0x2fb002c)==0)"
+      ;;
+    3000|4000|5000)
+      echo "$time_expr&&(RAWY>=13)&&((FLAG & 0x2fb0024)==0)"
+      ;;
+    *)
+      echo "$time_expr"
+      ;;
+  esac
+}
+
+clean_manifest_for_detector() {
+  local inst="$1"
+  local candidate
+  for candidate in "$CLEANDIR/${inst}_clean_files.txt" "$CLEANDIR/manifest/${inst}_clean_files.txt"; do
+    if [[ -s "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+clean_stage_complete() {
+  local inst manifest evt have=0
+  for inst in $DETECTORS; do
+    manifest="$(clean_manifest_for_detector "$inst" || true)"
+    [[ -n "$manifest" ]] || return 1
+    while IFS= read -r evt; do
+      [[ -n "$evt" ]] || continue
+      [[ -s "$evt" ]] || return 1
+      have=1
+    done < "$manifest"
+  done
+  [[ "$have" == "1" ]]
+}
+
 stage_exposure() {
   set_sas_clean_env
   need_cmd evselect
   need_cmd eexpmap
 
-  local inst evt label pimin pimax banddir instdir base point start stop ref
-  local counts exposure slices pointings
+  local inst evt manifest label pimin pimax banddir instdir base point start stop ref
+  local counts exposure novig_exposure refimage slices pointings expr refexpr
   local -a events=()
   for inst in $DETECTORS; do
-    manifest="$CLEANDIR/${inst}_clean_files.txt"
-    [[ -s "$manifest" ]] || continue
+    manifest="$(clean_manifest_for_detector "$inst" || true)"
+    [[ -n "$manifest" ]] || continue
     while IFS= read -r evt; do
       [[ -n "$evt" ]] && events+=("$evt")
     done < "$manifest"
   done
   [[ ${#events[@]} -gt 0 ]] || { echo "No clean event files found in $CLEANDIR" >&2; exit 1; }
+
+  if [[ "$FORCE" == "1" ]]; then
+    find "$EXPOSUREDIR" -type f \
+      \( -name '*_counts.fits' -o -name '*_exposure.fits' -o -name '*_novig_exposure.fits' -o -name '*_rate.fits' -o -name '*_exposure_ref.fits' \) -delete
+  fi
 
   if [[ "$FORCE" == "1" || ! -s "$EXPOSUREDIR/grid.env" ]]; then
     "$PYTHON" "$SCRIPT_DIR/tools.py" exposure-grid "$EXPOSUREDIR" "$IMAGE_BIN_PHYS" "$IMAGE_PAD_FRAC" "${events[@]}"
@@ -524,17 +610,23 @@ stage_exposure() {
     banddir="$EXPOSUREDIR/$label"
     mkdir -p "$banddir"
     local -a epic=()
+    local -a epic_novig=()
 
     for inst in $DETECTORS; do
       instdir="$banddir/$inst"
       mkdir -p "$instdir"
       local -a det=()
+      local -a det_novig=()
 
       while IFS=$'\t' read -r slice_inst evt base point start stop ref; do
         [[ "$slice_inst" == "$inst" ]] || continue
         [[ "$slice_inst" == "inst" ]] && continue
         counts="$instdir/${base}_counts.fits"
+        refimage="$instdir/${base}_exposure_ref.fits"
         exposure="$instdir/${base}_exposure.fits"
+        novig_exposure="$instdir/${base}_novig_exposure.fits"
+        expr="$(band_count_expr "$label" "$pimin" "$pimax" "$start" "$stop")"
+        refexpr="$(band_exposure_ref_expr "$label" "$start" "$stop")"
 
         if [[ "$FORCE" == "1" || ! -s "$counts" ]]; then
           runlog "exposure_${label}_${inst}_${base}_counts" \
@@ -546,12 +638,25 @@ stage_exposure() {
               withyranges=yes yimagemin="$Y_MIN_PHYS" yimagemax="$Y_MAX_PHYS" \
               ignorelegallimits=yes \
               writedss=yes \
-              expression="(TIME>=$start)&&(TIME<=$stop)&&(PI in [$pimin:$pimax])"
+              expression="$expr"
+        fi
+
+        if [[ "$FORCE" == "1" || ! -s "$refimage" ]]; then
+          runlog "exposure_${label}_${inst}_${base}_refimage" \
+            evselect table="${evt}:EVENTS" \
+              withimageset=yes imageset="$refimage" \
+              xcolumn=X ycolumn=Y imagebinning=binSize \
+              ximagebinsize="$BIN_PHYS" yimagebinsize="$BIN_PHYS" \
+              withxranges=yes ximagemin="$X_MIN_PHYS" ximagemax="$X_MAX_PHYS" \
+              withyranges=yes yimagemin="$Y_MIN_PHYS" yimagemax="$Y_MAX_PHYS" \
+              ignorelegallimits=yes \
+              writedss=yes \
+              expression="$refexpr"
         fi
 
         if [[ "$FORCE" == "1" || ! -s "$exposure" ]]; then
           runlog "exposure_${label}_${inst}_${base}_eexpmap" \
-            eexpmap imageset="$counts" \
+            eexpmap imageset="$refimage" \
               attitudeset="$ATTHKGEN_FILE" \
               eventset="$evt" \
               expimageset="$exposure" \
@@ -559,7 +664,18 @@ stage_exposure() {
               withvignetting=yes \
               attrebin="$EEXPMAP_ATTREBIN"
         fi
+        if [[ "$FORCE" == "1" || ! -s "$novig_exposure" ]]; then
+          runlog "exposure_${label}_${inst}_${base}_eexpmap_novig" \
+            eexpmap imageset="$refimage" \
+              attitudeset="$ATTHKGEN_FILE" \
+              eventset="$evt" \
+              expimageset="$novig_exposure" \
+              pimin="$pimin" pimax="$pimax" \
+              withvignetting=no \
+              attrebin="$EEXPMAP_ATTREBIN"
+        fi
         det+=("$counts" "$exposure")
+        det_novig+=("$novig_exposure")
       done < "$slices"
 
       [[ ${#det[@]} -gt 0 ]] || continue
@@ -569,7 +685,12 @@ stage_exposure() {
           "$banddir/${inst}_exposure.fits" \
           "$banddir/${inst}_rate.fits" \
           "${det[@]}"
+      runlog "exposure_${label}_${inst}_combine_novig" \
+        "$PYTHON" "$SCRIPT_DIR/tools.py" combine-exposures \
+          "$banddir/${inst}_novig_exposure.fits" \
+          "${det_novig[@]}"
       epic+=("$banddir/${inst}_counts.fits" "$banddir/${inst}_exposure.fits")
+      epic_novig+=("$banddir/${inst}_novig_exposure.fits")
     done
 
     [[ ${#epic[@]} -gt 0 ]] || continue
@@ -579,72 +700,244 @@ stage_exposure() {
         "$banddir/EPIC_exposure.fits" \
         "$banddir/EPIC_rate.fits" \
         "${epic[@]}"
+    runlog "exposure_${label}_combine_novig" \
+      "$PYTHON" "$SCRIPT_DIR/tools.py" combine-exposures \
+        "$banddir/EPIC_novig_exposure.fits" \
+        "${epic_novig[@]}"
   done < <(image_band_lines)
 }
 
 # ==============================================================================
-# Stage: background
-#
-# Purpose:
-#   Build constant per-pointing quantile background maps in counts space.
-#
-# Outputs:
-#   output/background/<band>/<inst>/<event>_<pointing>_{background,net_counts}.fits
-#   output/background/<band>/<inst>_{background,net_counts}.fits
-#   output/background/<band>/EPIC_{background,net_counts}.fits
-#   output/background/<band>/background_summary.tsv
+# QC helpers
 # ==============================================================================
 
-stage_background() {
-  need_file "$EXPOSUREDIR/grid.json"
-  need_file "$EXPOSUREDIR/slices.tsv"
+file_type() {
+  local name="$1"
+  case "$name" in
+    *SUM.SAS) echo "SUM.SAS" ;;
+    ccf.cif) echo "ccf.cif" ;;
+    *.FIT|*.FITZ|*.fits|*.fits.gz) echo "FITS" ;;
+    *.ASC) echo "ASC" ;;
+    MANIFEST.*) echo "MANIFEST" ;;
+    *.*) echo "${name##*.}" ;;
+    *) echo "other" ;;
+  esac
+}
 
-  local label pimin pimax banddir summary inst slice_inst evt base point start stop ref instdir
-  local counts exposure background net
-  while read -r label pimin pimax; do
-    [[ -n "$label" ]] || continue
-    banddir="$BACKGROUNDDIR/$label"
-    summary="$banddir/background_summary.tsv"
-    mkdir -p "$banddir"
-    rm -f "$summary"
-    find "$banddir" -type f \( -name '*_background.fits' -o -name '*_net_counts.fits' \) -delete
-    local -a epic=()
+count_lines() {
+  [[ -s "$1" ]] && wc -l < "$1" || echo 0
+}
 
+image_band_labels() {
+  local band label
+  IFS=';' read -r -a bands <<< "$IMAGE_BANDS"
+  for band in "${bands[@]}"; do
+    [[ -n "$band" ]] || continue
+    IFS=':' read -r label _ <<< "$band"
+    [[ -n "$label" ]] && echo "$label"
+  done
+}
+
+single_detector() {
+  set -- $DETECTORS
+  [[ $# -eq 1 ]] && echo "$1"
+}
+
+qc_init() {
+  local initdir="$WORKDIR/init"
+  local qcdir="$WORKDIR/qc/init"
+  local files="$qcdir/output_files.txt"
+  local counts="$qcdir/file_type_counts.txt"
+
+  [[ -d "$initdir" ]] || { echo "Missing init output directory: $initdir" >&2; exit 1; }
+  mkdir -p "$qcdir"
+
+  {
+    [[ -f "$WORKDIR/sas_setup.env" ]] && echo "$WORKDIR/sas_setup.env"
+    [[ -d "$WORKDIR/logs" ]] && find "$WORKDIR/logs" -maxdepth 1 -type f -name 'init_*.log' | sort
+    find "$initdir" -maxdepth 1 \( -type f -o -type l \) | sort
+  } > "$files"
+
+  while IFS= read -r path; do
+    file_type "$(basename "$path")"
+  done < "$files" | sort | uniq -c | awk '{ printf "%s %s\n", $2, $1 }' > "$counts"
+
+  echo "Wrote $files"
+  echo "Wrote $counts"
+}
+
+qc_repro() {
+  local reprodir="$WORKDIR/repro"
+  local qcdir="$WORKDIR/qc/repro"
+  local files="$qcdir/output_files.txt"
+  local counts="$qcdir/manifest_counts.txt"
+  local status="$qcdir/status.txt"
+
+  [[ -d "$reprodir" ]] || { echo "Missing repro output directory: $reprodir" >&2; exit 1; }
+  mkdir -p "$qcdir"
+
+  {
+    [[ -f "$WORKDIR/attitude.env" ]] && echo "$WORKDIR/attitude.env"
+    [[ -d "$WORKDIR/logs" ]] && find "$WORKDIR/logs" -maxdepth 1 -type f -name 'repro_*.log' | sort
+    find "$reprodir" -maxdepth 2 \( -type f -o -type l \) | sort
+  } > "$files"
+
+  {
     for inst in $DETECTORS; do
-      instdir="$banddir/$inst"
-      mkdir -p "$instdir"
-      local -a det=()
-
-      while IFS=$'\t' read -r slice_inst evt base point start stop ref; do
-        [[ "$slice_inst" == "$inst" ]] || continue
-        background="$instdir/${base}_background.fits"
-        net="$instdir/${base}_net_counts.fits"
-        counts="$EXPOSUREDIR/$label/$inst/${base}_counts.fits"
-        exposure="$EXPOSUREDIR/$label/$inst/${base}_exposure.fits"
-        [[ -s "$counts" && -s "$exposure" ]] || continue
-
-        "$PYTHON" "$SCRIPT_DIR/tools.py" background-map \
-          "$counts" "$exposure" "$background" "$net" \
-          "$BACKGROUND_COUNTS_QUANTILE" "$BACKGROUND_MIN_PIXELS" \
-          "$BACKGROUND_EXCLUDE_RADIUS_FRAC" \
-          "$summary" "$label" "$inst" "$base"
-        det+=("$background" "$net")
-      done < "$EXPOSUREDIR/slices.tsv"
-
-      [[ ${#det[@]} -gt 0 ]] || continue
-      "$PYTHON" "$SCRIPT_DIR/tools.py" combine-background \
-        "$banddir/${inst}_background.fits" \
-        "$banddir/${inst}_net_counts.fits" \
-        "${det[@]}"
-      epic+=("$banddir/${inst}_background.fits" "$banddir/${inst}_net_counts.fits")
+      echo "$inst $(count_lines "$reprodir/manifest/${inst}_raw.txt")"
     done
+  } > "$counts"
 
-    [[ ${#epic[@]} -gt 0 ]] || continue
-    "$PYTHON" "$SCRIPT_DIR/tools.py" combine-background \
-      "$banddir/EPIC_background.fits" \
-      "$banddir/EPIC_net_counts.fits" \
-      "${epic[@]}"
-  done < <(image_band_lines)
+  {
+    [[ -s "$reprodir/atthk.dat" ]] && echo "atthk.dat ok" || echo "atthk.dat missing"
+    [[ -s "$WORKDIR/attitude.env" ]] && echo "attitude.env ok" || echo "attitude.env missing"
+    [[ "$DETECTORS" == *PN* ]] && { [[ -s "$WORKDIR/logs/repro_epproc.log" ]] && echo "repro_epproc.log ok" || echo "repro_epproc.log missing"; }
+    [[ "$DETECTORS" == *M1* || "$DETECTORS" == *M2* ]] && { [[ -s "$WORKDIR/logs/repro_emproc.log" ]] && echo "repro_emproc.log ok" || echo "repro_emproc.log missing"; }
+    [[ -s "$WORKDIR/logs/repro_atthkgen.log" ]] && echo "repro_atthkgen.log ok" || echo "repro_atthkgen.log missing"
+  } > "$status"
+
+  "$PYTHON" "$SCRIPT_DIR/tools.py" event-mosaic "$reprodir/manifest" "$qcdir" "$DETECTORS"
+
+  echo "Wrote $files"
+  echo "Wrote $counts"
+  echo "Wrote $status"
+  echo "Wrote $qcdir/soft_lt1kev_mosaic.png"
+  echo "Wrote $qcdir/hard_gt1kev_mosaic.png"
+}
+
+qc_clean() {
+  local cleandir="$WORKDIR/clean"
+  local qcdir="$WORKDIR/qc/clean"
+  local files="$qcdir/output_files.txt"
+  local counts="$qcdir/manifest_counts.txt"
+  local status="$qcdir/status.txt"
+  local gti_summary="$qcdir/flare_gti_summary.tsv"
+  local inst manifest lc_root event_count manifest_count
+
+  [[ -d "$cleandir" ]] || { echo "Missing clean output directory: $cleandir" >&2; exit 1; }
+  mkdir -p "$qcdir"
+
+  {
+    find "$cleandir" -maxdepth 5 \( -type f -o -type l \) | sort
+    [[ -d "$WORKDIR/logs" ]] && find "$WORKDIR/logs" -maxdepth 1 -type f -name 'clean_*.log' | sort
+  } > "$files"
+
+  {
+    for inst in $DETECTORS; do
+      manifest="$(clean_manifest_for_detector "$inst" || true)"
+      echo "$inst $(count_lines "$manifest")"
+    done
+  } > "$counts"
+
+  {
+    for inst in $DETECTORS; do
+      manifest="$(clean_manifest_for_detector "$inst" || true)"
+      if [[ -n "$manifest" ]]; then
+        manifest_count="$(count_lines "$manifest")"
+        event_count="$(find "$cleandir/events/$inst" -maxdepth 1 -type f -name '*_clean.fits' 2>/dev/null | wc -l)"
+        echo "$(basename "$manifest") ok"
+        echo "${inst}_manifest_events $manifest_count"
+        echo "${inst}_clean_event_files_on_disk $event_count"
+      else
+        echo "${inst}_clean_files.txt missing"
+      fi
+    done
+  } > "$status"
+
+  "$PYTHON" "$SCRIPT_DIR/tools.py" event-mosaic "$cleandir" "$qcdir" "$DETECTORS"
+  "$PYTHON" "$SCRIPT_DIR/tools.py" slice-qc "$qcdir" "$cleandir" "$DETECTORS" "$WORKDIR/init" "$IMAGE_BANDS"
+  [[ -s "$cleandir/flare_gti_summary.tsv" ]] && cp -f "$cleandir/flare_gti_summary.tsv" "$gti_summary"
+  [[ -s "$cleandir/flare_summary.tsv" ]] && cp -f "$cleandir/flare_summary.tsv" "$qcdir/flare_summary.tsv"
+  lc_root="$cleandir/gti"
+  [[ -d "$cleandir/lightcurves" ]] && lc_root="$cleandir/lightcurves"
+  "$PYTHON" "$SCRIPT_DIR/tools.py" flare-qc "$lc_root" "$qcdir" "$CLEAN_GTI_RATE_CUT"
+
+  echo "Wrote $files"
+  echo "Wrote $counts"
+  echo "Wrote $status"
+  [[ -s "$gti_summary" ]] && echo "Wrote $gti_summary"
+  [[ -s "$qcdir/flare_summary.tsv" ]] && echo "Wrote $qcdir/flare_summary.tsv"
+  [[ -s "$qcdir/flare_lightcurves.png" ]] && echo "Wrote $qcdir/flare_lightcurves.png"
+  [[ -s "$qcdir/flare_lightcurves.tsv" ]] && echo "Wrote $qcdir/flare_lightcurves.tsv"
+  echo "Wrote $qcdir/soft_lt1kev_mosaic.png"
+  echo "Wrote $qcdir/hard_gt1kev_mosaic.png"
+  echo "Wrote $qcdir/pre_exposure_*.tsv"
+  echo "Wrote $qcdir/pre_exposure_summary.txt"
+}
+
+qc_exposure() {
+  local expdir="$WORKDIR/exposure"
+  local qcdir="$WORKDIR/qc/exposure"
+  local files="$qcdir/output_files.txt"
+  local status="$qcdir/status.txt"
+  local label detector counts_map exposure_map novig_map rate_map
+
+  [[ -d "$expdir" ]] || { echo "Missing exposure output directory: $expdir" >&2; exit 1; }
+  mkdir -p "$qcdir"
+  detector="$(single_detector)"
+
+  {
+    find "$expdir" -maxdepth 4 \( -type f -o -type l \) | sort
+    [[ -d "$WORKDIR/logs" ]] && find "$WORKDIR/logs" -maxdepth 1 -type f -name 'exposure_*.log' | sort
+  } > "$files"
+
+  {
+    [[ -s "$expdir/grid.env" ]] && echo "grid.env ok" || echo "grid.env missing"
+    [[ -s "$expdir/pointings.tsv" ]] && echo "pointings $(($(wc -l < "$expdir/pointings.tsv") - 1))" || echo "pointings.tsv missing"
+    [[ -s "$expdir/slices.tsv" ]] && echo "slices $(($(wc -l < "$expdir/slices.tsv") - 1))" || echo "slices.tsv missing"
+    for label in $(image_band_labels); do
+      for inst in $DETECTORS; do
+        [[ -s "$expdir/$label/${inst}_counts.fits" ]] && echo "$label/${inst}_counts.fits ok" || echo "$label/${inst}_counts.fits missing"
+        [[ -s "$expdir/$label/${inst}_exposure.fits" ]] && echo "$label/${inst}_exposure.fits ok" || echo "$label/${inst}_exposure.fits missing"
+        [[ -s "$expdir/$label/${inst}_novig_exposure.fits" ]] && echo "$label/${inst}_novig_exposure.fits ok" || echo "$label/${inst}_novig_exposure.fits missing"
+      done
+      for product in EPIC_counts EPIC_exposure EPIC_novig_exposure EPIC_rate; do
+        [[ -s "$expdir/$label/${product}.fits" ]] && echo "$label/${product}.fits ok" || echo "$label/${product}.fits missing"
+      done
+    done
+  } > "$status"
+
+  rm -f "$qcdir"/*.png
+  for label in $(image_band_labels); do
+    counts_map="$expdir/$label/EPIC_counts.fits"
+    exposure_map="$expdir/$label/EPIC_exposure.fits"
+    novig_map="$expdir/$label/EPIC_novig_exposure.fits"
+    rate_map="$expdir/$label/EPIC_rate.fits"
+    if [[ -n "$detector" ]]; then
+      counts_map="$expdir/$label/${detector}_counts.fits"
+      exposure_map="$expdir/$label/${detector}_exposure.fits"
+      novig_map="$expdir/$label/${detector}_novig_exposure.fits"
+      rate_map="$expdir/$label/${detector}_rate.fits"
+    fi
+    [[ -s "$counts_map" ]] && \
+      "$PYTHON" "$SCRIPT_DIR/tools.py" fits-png "$counts_map" "$qcdir/${label}_counts_mosaic.png" magma log "$expdir/grid.json" "$WORKDIR/clean" "$DETECTORS"
+    [[ -s "$exposure_map" ]] && \
+      "$PYTHON" "$SCRIPT_DIR/tools.py" fits-png "$exposure_map" "$qcdir/${label}_exposure_mosaic.png" magma linear "$expdir/grid.json" "$WORKDIR/clean" "$DETECTORS"
+    [[ -s "$novig_map" ]] && \
+      "$PYTHON" "$SCRIPT_DIR/tools.py" fits-png "$novig_map" "$qcdir/${label}_novig_exposure_mosaic.png" magma linear "$expdir/grid.json" "$WORKDIR/clean" "$DETECTORS"
+    [[ -s "$rate_map" ]] && \
+      "$PYTHON" "$SCRIPT_DIR/tools.py" fits-png "$rate_map" "$qcdir/${label}_rate_mosaic.png" magma log "$expdir/grid.json" "$WORKDIR/clean" "$DETECTORS"
+  done
+
+  echo "Wrote $files"
+  echo "Wrote $status"
+  echo "Wrote $qcdir/*_mosaic.png"
+}
+
+run_qc_stage() {
+  case "$1" in
+    init) qc_init ;;
+    repro) qc_repro ;;
+    clean) qc_clean ;;
+    exposure) qc_exposure ;;
+    all|qc) qc_init; qc_repro; qc_clean; qc_exposure ;;
+    *) echo "No QC stage for: $1" >&2; exit 2 ;;
+  esac
+}
+
+maybe_run_qc() {
+  [[ "$RUN_QC" == "1" ]] || return 0
+  run_qc_stage "$STAGE"
 }
 
 # ==============================================================================
@@ -652,12 +945,16 @@ stage_background() {
 # ==============================================================================
 
 case "$STAGE" in
-  init) stage_init ;;
-  repro) stage_repro ;;
-  clean) stage_clean ;;
-  exposure) stage_exposure ;;
-  background) stage_background ;;
-  all) stage_init; stage_repro; stage_clean; stage_exposure; stage_background ;;
+  init) stage_init; maybe_run_qc ;;
+  repro) stage_repro; maybe_run_qc ;;
+  clean) stage_clean; maybe_run_qc ;;
+  exposure) stage_exposure; maybe_run_qc ;;
+  all) stage_init; stage_repro; stage_clean; stage_exposure; maybe_run_qc ;;
+  qc-init) qc_init ;;
+  qc-repro) qc_repro ;;
+  qc-clean) qc_clean ;;
+  qc-exposure) qc_exposure ;;
+  qc) run_qc_stage all ;;
   env) print_env ;;
   *) echo "Unknown stage: $STAGE" >&2; exit 2 ;;
 esac
