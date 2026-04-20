@@ -11,135 +11,128 @@ The active source files are:
   config.json
   README.txt
 
-Generated products live under output/. The PPS directory is reference input and
-must not be edited by this pipeline.
+For now this version implements init, repro, and clean. Generated products live
+under output/.
 
 
 Running
 -------
 
-Run a production stage:
+Production:
 
   ./pipeline.sh init
   ./pipeline.sh repro
   ./pipeline.sh clean
-  ./pipeline.sh exposure
+  ./pipeline.sh all
 
-Run QC from the same entry point:
+QC:
 
   ./pipeline.sh qc-init
   ./pipeline.sh qc-repro
   ./pipeline.sh qc-clean
-  ./pipeline.sh qc-exposure
   ./pipeline.sh qc
 
-Run matching QC after a production stage:
-
-  ./pipeline.sh exposure --force --qc
-
-Use --force only when intentionally rebuilding a stage.
+Use --force only when intentionally rebuilding products.
 
 
-Current Data Layout
--------------------
+Config
+------
 
-The current cleaned PN products on disk use this layout:
-
-  output/clean/events/PN/*_clean.fits
-  output/clean/manifest/PN_clean_files.txt
-  output/clean/flare_summary.tsv
-  output/clean/gti/PN/*_flare_gti.fits
-  output/clean/lightcurves/PN/*_flare_lc.fits
-
-The manifest is authoritative. Extra clean event files may exist on disk from
-earlier trials, but downstream stages and QC use only the files listed in
-output/clean/manifest/PN_clean_files.txt. Running clean without --force should
-skip when the selected detector manifests exist and all listed event files are
-present.
-
-The current output/exposure directory contains earlier two-band trial products
-under output/exposure/PN/. The repaired exposure stage does not treat those as
-complete PPS-band products. Rebuilding exposure writes the PPS-band layout
-described below.
-
-
-Exposure Strategy
------------------
-
-The public images stage is intentionally absent. The exposure stage creates the
-count images it needs internally.
-
-The configured PN exposure bands follow the PPS band boundaries:
-
-  1000  eexpmap 200-500 eV      counts PI 201-500, PATTERN==0
-  2000  eexpmap 500-1000 eV     counts PI 501-1000, PATTERN<=4
-  3000  eexpmap 1000-2000 eV    counts PI 1001-2000, PATTERN<=4
-  4000  eexpmap 2000-4500 eV    counts PI 2001-4500, PATTERN<=4
-  5000  eexpmap 4500-12000 eV   counts PI 4501-7800 or 8201-12000, PATTERN<=4
-
-The count filters also require RAWY>=13 and PPS-style FLAG masks.
-
-For each band and slice, exposure builds:
-
-  *_counts.fits
-  *_exposure_ref.fits
-  *_exposure.fits
-  *_novig_exposure.fits
-
-The *_exposure_ref.fits files are internal eexpmap reference images. They keep
-the slice TIME and FLAG selections in DSS even when the science counts image is
-empty in a narrow band.
-
-The vignetted exposure map is for sky/comet photons. The non-vignetted exposure
-map is retained as an auxiliary diagnostic.
-
-
-Stage Summary
--------------
-
-init
-  Builds output/init/ccf.cif, output/init/*SUM.SAS, ODF symlinks, and
-  output/sas_setup.env.
-
-repro
-  Runs epproc/emproc for selected detectors and writes output/repro manifests
-  plus output/repro/atthk.dat and output/attitude.env.
-
-clean
-  Applies event-quality and flare-GTI filtering into output/clean/events and
-  writes output/clean/manifest. Existing clean products are detected from that
-  manifest.
-
-exposure
-  Builds PPS-band counts, vignetted exposure, non-vignetted exposure, and rate
-  maps from the cleaned event lists.
-
-Important Config Keys
----------------------
-
-detectors
-  Currently PN.
-
-image_bands
-  PPS exposure bands, encoded as label:pimin:pimax entries.
-
-image_bin_phys
-  SKY image bin size. Current value is 80.
-
-eexpmap_attrebin
-  Passed to eexpmap.
+qc_soft_hard_split_ev
+  PI/eV threshold for the repro QC soft and hard mosaics. The current default is
+  1000, so soft uses PI < 1000 and hard uses PI > 1000.
 
 clean_gti_*
-  High-energy flare-GTI settings for clean when rebuilding. Current values
-  match the existing PN flare-lightcurve provenance: PI 7000-15000 eV, 10 s
-  bins, and 4.80001211 ct/s for the accepted S003 exposure.
+  Fixed high-energy flare-GTI settings. The current defaults use 7-15 keV,
+  PATTERN <= 0, 10 s light-curve bins, and RATE <= 4.80001211 count/s.
+
+clean_bands
+  PPS-style spectral event-filter definitions used by clean. Each band defines
+  PI ranges plus pn and MOS pattern, flag, and extra terms. The default pn band
+  filters follow the PPS image-band convention:
+
+    1000  0.2-0.5 keV   PI 201-500       PATTERN == 0   FLAG mask 0x2fb002c
+    2000  0.5-1.0 keV   PI 501-1000      PATTERN <= 4   FLAG mask 0x2fb002c
+    3000  1.0-2.0 keV   PI 1001-2000     PATTERN <= 4   FLAG mask 0x2fb0024
+    4000  2.0-4.5 keV   PI 2001-4500     PATTERN <= 4   FLAG mask 0x2fb0024
+    5000  4.5-12.0 keV  PI 4501-7800 or 8201-12000,
+                        PATTERN <= 4, FLAG mask 0x2fb0024
+
+  The default pn filters also include RAWY >= 13. The default MOS filters use
+  #XMMEA_EM and PATTERN <= 12 for each configured PI band.
 
 
-Validation Commands
--------------------
+Init
+----
+
+init creates or adopts:
+
+  output/init/ccf.cif
+  output/init/*SUM.SAS
+  output/init/<ODF constituent symlinks>
+  output/sas_setup.env
+
+The ODF constituent symlinks are intentional. The SUM.SAS PATH line is rewritten
+to output/init/ so later SAS tasks read the mirrored ODF directory rather than
+the original ODF directory. This preserves the old v6 convention and keeps the
+working products relocatable within this reduction tree.
+
+If ccf.cif and *SUM.SAS already exist, init writes the missing env file and
+skips cifbuild/odfingest unless --force is set.
+
+
+Repro
+-----
+
+repro creates or adopts:
+
+  output/repro/*_ImagingEvts.ds
+  output/repro/manifest/PN_raw.txt
+  output/repro/manifest/M1_raw.txt
+  output/repro/manifest/M2_raw.txt
+  output/repro/atthk.dat
+  output/attitude.env
+
+The selected detectors are controlled by config.json. Accepted detector names
+are PN, M1, M2, MOS1, MOS2, EMOS1, EMOS2, EPIC, and ALL.
+
+Before running epproc or emproc, repro rebuilds manifests from existing event
+lists. If the selected manifests, atthk.dat, and attitude.env are already valid,
+the stage skips without requiring SAS in PATH.
+
+
+Clean
+-----
+
+clean creates or adopts:
+
+  output/clean/events/<detector>/<band>/*_<band>_clean.fits
+  output/clean/manifest/<detector>_<band>_clean_files.txt
+  output/clean/manifest/<detector>_clean_files.txt
+  output/clean/clean_band_filters.tsv
+  output/clean/gti/<detector>/*_flare_gti.fits
+  output/clean/lightcurves/<detector>/*_flare_lc.fits
+  output/clean/flare_gti_summary.tsv
+
+One flare GTI is built per raw event list and applied to each configured band.
+The aggregate manifest is kept for compatibility with older products; the
+per-band manifests carry the configured PPS-style filters forward explicitly.
+
+
+Shortlink Convention
+--------------------
+
+When the configured output path is longer than shortlink_max_path, the pipeline
+runs SAS tasks through /tmp/_xmm_<shortlink_name>. Env files and manifests still
+store stable real paths under output/.
+
+
+Validation
+----------
 
 These checks do not run SAS production tasks:
 
   bash -n pipeline.sh
-  python -m py_compile tools.py
-  python -m json.tool config.json
+  python3 -m py_compile tools.py
+  python3 -m json.tool config.json
+  python3 tools.py clean-band-table config.json

@@ -11,18 +11,101 @@
   "sas_verbosity": "4",
   "detectors": "PN",
   "ahf_input": "",
-  "clean_pi_min": 200,
-  "clean_pi_max": 12000,
+  "qc_soft_hard_split_ev": 1000,
+
   "clean_gti_enabled": true,
   "clean_gti_rate_cut": 4.80001211,
   "clean_gti_timebin": 10,
   "clean_gti_pi_min": 7000,
   "clean_gti_pi_max": 15000,
   "clean_gti_pattern_max": 0,
-  "image_bands": "1000:200:500;2000:500:1000;3000:1000:2000;4000:2000:4500;5000:4500:12000",
-  "image_bin_phys": 80,
-  "image_pad_frac": 0.08,
-  "eexpmap_attrebin": "0.020626481",
+  "clean_bands": [
+    {
+      "label": "1000",
+      "description": "0.2-0.5 keV",
+      "pi_ranges": [[201, 500]],
+      "pn": {
+        "pattern_min": 0,
+        "pattern_max": 0,
+        "flag": "(FLAG & 0x2fb002c)==0",
+        "extra": ["RAWY>=13"]
+      },
+      "mos": {
+        "pattern_min": 0,
+        "pattern_max": 12,
+        "flag": "#XMMEA_EM",
+        "extra": []
+      }
+    },
+    {
+      "label": "2000",
+      "description": "0.5-1.0 keV",
+      "pi_ranges": [[501, 1000]],
+      "pn": {
+        "pattern_min": 0,
+        "pattern_max": 4,
+        "flag": "(FLAG & 0x2fb002c)==0",
+        "extra": ["RAWY>=13"]
+      },
+      "mos": {
+        "pattern_min": 0,
+        "pattern_max": 12,
+        "flag": "#XMMEA_EM",
+        "extra": []
+      }
+    },
+    {
+      "label": "3000",
+      "description": "1.0-2.0 keV",
+      "pi_ranges": [[1001, 2000]],
+      "pn": {
+        "pattern_min": 0,
+        "pattern_max": 4,
+        "flag": "(FLAG & 0x2fb0024)==0",
+        "extra": ["RAWY>=13"]
+      },
+      "mos": {
+        "pattern_min": 0,
+        "pattern_max": 12,
+        "flag": "#XMMEA_EM",
+        "extra": []
+      }
+    },
+    {
+      "label": "4000",
+      "description": "2.0-4.5 keV",
+      "pi_ranges": [[2001, 4500]],
+      "pn": {
+        "pattern_min": 0,
+        "pattern_max": 4,
+        "flag": "(FLAG & 0x2fb0024)==0",
+        "extra": ["RAWY>=13"]
+      },
+      "mos": {
+        "pattern_min": 0,
+        "pattern_max": 12,
+        "flag": "#XMMEA_EM",
+        "extra": []
+      }
+    },
+    {
+      "label": "5000",
+      "description": "4.5-12.0 keV",
+      "pi_ranges": [[4501, 7800], [8201, 12000]],
+      "pn": {
+        "pattern_min": 0,
+        "pattern_max": 4,
+        "flag": "(FLAG & 0x2fb0024)==0",
+        "extra": ["RAWY>=13"]
+      },
+      "mos": {
+        "pattern_min": 0,
+        "pattern_max": 12,
+        "flag": "#XMMEA_EM",
+        "extra": []
+      }
+    }
+  ],
 
   "link_odf_constituents": true,
   "skip_odf_link_patterns": [
