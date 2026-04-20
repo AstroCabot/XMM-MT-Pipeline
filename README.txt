@@ -91,7 +91,7 @@ the slice TIME and FLAG selections in DSS even when the science counts image is
 empty in a narrow band.
 
 The vignetted exposure map is for sky/comet photons. The non-vignetted exposure
-map is retained for later background modeling support.
+map is retained as an auxiliary diagnostic.
 
 
 Stage Summary
@@ -114,11 +114,6 @@ exposure
   Builds PPS-band counts, vignetted exposure, non-vignetted exposure, and rate
   maps from the cleaned event lists.
 
-background, sources, stack
-  Later stages are still present but should be treated as downstream work. They
-  depend on the exposure products.
-
-
 Important Config Keys
 ---------------------
 
@@ -133,9 +128,6 @@ image_bin_phys
 
 eexpmap_attrebin
   Passed to eexpmap.
-
-source_detect_band
-  Current downstream source-detection band. With PPS bands this is 4000.
 
 clean_gti_*
   High-energy flare-GTI settings for clean when rebuilding. Current values

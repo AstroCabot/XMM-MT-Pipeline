@@ -384,32 +384,6 @@ build_flare_gti() {
   CLEAN_GTI_RESULT="$gti"
 }
 
-merge_pairwise() {
-  local outfile="$1"
-  shift
-  local -a files=("$@")
-  [[ ${#files[@]} -gt 0 ]] || return 1
-  if [[ ${#files[@]} -eq 1 ]]; then
-    cp -f "${files[0]}" "$outfile"
-    return 0
-  fi
-
-  local tmp="${files[0]}" next outtmp i=1
-  local -a made=()
-  while [[ $i -lt ${#files[@]} ]]; do
-    next="${files[$i]}"
-    outtmp="$outfile.tmp${i}.fits"
-    merge set1="$tmp" set2="$next" outset="$outtmp" imagesize="$PREMERGE_IMAGE_SIZE_DEG"
-    made+=("$outtmp")
-    tmp="$outtmp"
-    i=$((i + 1))
-  done
-  mv -f "$tmp" "$outfile"
-  for tmp in "${made[@]}"; do
-    [[ "$tmp" == "$outfile" ]] || rm -f "$tmp"
-  done
-}
-
 clean_one_event() {
   local inst="$1"
   local evt="$2"
