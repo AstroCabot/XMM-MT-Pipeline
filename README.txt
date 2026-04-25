@@ -222,26 +222,86 @@ Cheese
 cheese creates or adopts:
 
   output/cheese/cheese_manifest.tsv
-  output/cheese/regions/<detector>/<event>/*_hard_global_region.fits
-  output/cheese/regions/<detector>/<event>/*_hard_base_mask.fits
+  output/cheese/inputs/<detector>/<event>/*_cheese_events.fits       (PI 1000-4000)
+  output/cheese/inputs/<detector>/<event>/*_cheese_counts.fits
+  output/cheese/inputs/<detector>/<event>/*_cheese_exp_vig.fits
+  output/cheese/inputs/<detector>/<event>/*_cheese_bkg.fits          (esplinemap)
+  output/cheese/inputs/<detector>/<event>/*_cheese_eboxlist_{l,m}.fits
+  output/cheese/regions/<detector>/<event>/*_hard_detmask.fits       (emask)
+  output/cheese/regions/<detector>/<event>/*_hard_emllist.fits       (emldetect)
+  output/cheese/regions/<detector>/<event>/*_hard_global_region.fits (region sky)
+  output/cheese/regions/<detector>/<event>/*_hard_detxy_region.fits  (region detxy)
+  output/cheese/regions/<detector>/<event>/*_hard_regmask.fits       (regionmask)
+  output/cheese/regions/<detector>/<event>/*_hard_base_mask.fits     (combined)
   output/cheese/<band>/<detector>/<event>/*_<band>_cheesemask.fits
   output/cheese/<band>/<detector>/<event>/*_<band>_cheesed_counts.fits
   output/cheese/<band>/<detector>/<event>/*_<band>_cheesed_exp_vig.fits
 
-cheese consumes output/maps/source_manifest.tsv and output/maps/maps_manifest.tsv.
-It uses the shared hard-band source list to define source holes, and it does
-not apply the central comet exclusion. The source holes are turned into a
-per-band image mask by:
+cheese mirrors the reduction_v8 cheese stage: it builds its own detection
+images at PI [cheese_emin, cheese_emax] (default 1000-4000 eV) by filtering
+the clean-stage event files in that range, binning onto the maps grid, and
+running eexpmap + emask. It then performs v8's full source-detection
+sequence:
 
-  region operationstyle=global
-  regionmask
-  copy the resulting keep-mask to each band
-  multiply counts and vignetted exposure by the resulting cheese mask
+  eboxdetect usemap=no   local box pass with likemin=cheese_mlmin, boxsize=5,
+                         nruns=3, over the cheese band.
+  esplinemap             spline background with nsplinenodes=20,
+                         excesssigma=4, nfitrun=3, snrmin=30, smoothsigma=15,
+                         scut=0.01, mlmin=1.
+  eboxdetect usemap=yes  map-mode box pass seeded by the spline background.
+  emldetect              ellbeta PSF with beta-model extent
+                         (fitextent=yes, extentmodel=beta, dmlextmin=6,
+                         minextent=1.5, maxextent=20, withtwostage=yes).
+  region x2              outunit=detxy and outunit=xy on the emllist, with
+                         expression (ID_INST==N)&&(ID_BAND==1)&&
+                         (DET_ML>=MLMIN.0)&&(FLUX>=FLUX*1e-14),
+                         shrinkconfused=yes, radiusstyle=contour,
+                         fixedradius=12, energyfraction=0.9,
+                         bkgfraction=0.6, withboresightfudge=yes.
+  regionmask             rasterize the sky region into a regmask on the
+                         cheese-band counts grid.
+  combine-masks          base_mask = (detmask > 0) & (regmask > 0)
+                         (python helper in tools.py, v8-identical).
+  per-band               copy base_mask to each maps band's cheesemask and
+                         multiply counts and vignetted exposure by it.
 
-This stage is intentionally lighter than a full SAS diffuse-background fit. It
-is meant to provide masked images for later background estimation or smoothing
-while reusing the hard-band-only source-refinement products already created by
-maps.
+If emldetect (or a subsequent region call) fails, cheese degrades gracefully
+by copying the detmask into base_mask — the frame still gets a FOV keep-mask
+so downstream bands are not blocked. This matches the v8 fallback behaviour.
+
+PN is instid=1. For MOS1/MOS2 the stage sets instid=2 and instid=3 and
+switches to hrm1def/hrm2def and xidm1def/xidm2def automatically; the
+detectors list in config.json controls which are processed.
+
+Relevant config keys (all optional; listed with defaults):
+
+  cheese_emin                 1000    cheese detection band lower PI
+  cheese_emax                 4000    cheese detection band upper PI
+  cheese_mlmin                10      emldetect mlmin and region DET_ML floor
+  cheese_flux                 0.2     region FLUX floor in units of 1e-14
+  cheese_ecf_pn               3.2     energy conversion factor (pn)
+  cheese_ecf_mos              1.65    energy conversion factor (mos)
+  cheese_emask_thresh1        0.3     emask low threshold
+  cheese_emask_thresh2        0.5     emask high threshold
+  cheese_region_energyfraction 0.9    region energyfraction
+  cheese_region_fixedradius   12      region fixedradius (sky pixels)
+  cheese_region_bkgfraction   0.6     region bkgfraction
+  cheese_esplinemap_nsplinenodes 20
+  cheese_esplinemap_excesssigma  4
+  cheese_esplinemap_nfitrun      3
+  cheese_esplinemap_snrmin       30
+  cheese_esplinemap_smoothsigma  15
+  cheese_esplinemap_scut         0.01
+  cheese_esplinemap_mlmin        1
+  cheese_eboxdetect_nruns        3
+  cheese_eboxdetect_boxsize      5
+
+Note: cheese runs its own eexpmap for the cheese band (once per inst/base).
+This is additional work relative to the original v6 cheese, but preserves
+the v8 detection-chain fidelity -- emldetect / esplinemap / eboxdetect all
+require an exposure map and detmask matched to the detection band. The
+vignetted maps-stage exposures at 1000-2000 / 2000-7200 eV (soft / hard) are
+reused unchanged for the cheesed_exp_vig products.
 
 cheese can be rerun from a chosen dependency point:
 

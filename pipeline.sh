@@ -11,6 +11,8 @@ NO_SHORTLINK=0
 RUN_QC=0
 MAPS_RERUN_FROM=""
 CHEESE_RERUN_FROM=""
+BG_FRACTION_OVERRIDE=""
+BG_OUTSIDE_RADIUS_OVERRIDE=""
 
 usage() {
   cat <<'EOF'
@@ -21,6 +23,9 @@ Stages:
   repro      Run epproc/emproc and write raw EPIC manifests.
   clean      Apply flare GTIs and PPS-style band event filters.
   maps       Make SAS count, exposure, and hard-band source products.
+  maps-background
+             Compute flat constant background images from existing maps
+             products without rerunning the rest of the maps stage.
   cheese     Make hard-band point-source masks and masked map images.
   all        Run init, repro, clean, maps, and cheese.
   qc-init    QC init outputs.
@@ -42,13 +47,29 @@ Options:
                   grid, counts, exposure, mask, sources.
   --cheese-from STEP
                   Rebuild cheese products from STEP downstream. STEP is one of:
-                  regions, mask, images.
+                  detect, regions, mask, images.
+                  detect:  re-run emldetect, region, regionmask and
+                           everything downstream.
+                  regions: keep emldetect SRCLIST; re-run region +
+                           regionmask + apply.
+                  mask:    keep SRCLIST + region table; re-run regionmask
+                           + apply.
+                  images:  re-apply the existing cheese mask to every
+                           band.
+  --bg-fraction VAL
+                  Override maps_background_fraction from config (used by
+                  the maps-background sub-stage).
+  --bg-outside-radius VAL
+                  Override maps_background_outside_radius_fraction from
+                  config. The mean of the counts image is taken from
+                  pixels OUTSIDE a central circle of radius VAL * 0.5 *
+                  min(width, height).
 EOF
 }
 
 while (($#)); do
   case "$1" in
-    init|repro|clean|maps|cheese|all|qc-init|qc-repro|qc-clean|qc-maps|qc-cheese|qc|env) STAGE="$1"; shift ;;
+    init|repro|clean|maps|maps-background|cheese|all|qc-init|qc-repro|qc-clean|qc-maps|qc-cheese|qc|env) STAGE="$1"; shift ;;
     --config|-c) CONFIG="$2"; shift 2 ;;
     --force|-f) FORCE=1; shift ;;
     --qc) RUN_QC=1; shift ;;
@@ -56,6 +77,8 @@ while (($#)); do
     --no-shortlink) NO_SHORTLINK=1; shift ;;
     --maps-from) MAPS_RERUN_FROM="$2"; shift 2 ;;
     --cheese-from) CHEESE_RERUN_FROM="$2"; shift 2 ;;
+    --bg-fraction) BG_FRACTION_OVERRIDE="$2"; shift 2 ;;
+    --bg-outside-radius) BG_OUTSIDE_RADIUS_OVERRIDE="$2"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -1043,33 +1066,38 @@ stage_maps() {
   echo "Wrote $REAL_MAPSDIR/grid.env"
 }
 
+stage_maps_background() {
+  if ! maps_stage_complete; then
+    echo "maps stage is not complete; run './pipeline.sh maps' first" >&2
+    exit 1
+  fi
+  local fraction="${BG_FRACTION_OVERRIDE:-$MAPS_BACKGROUND_FRACTION}"
+  local outside_radius="${BG_OUTSIDE_RADIUS_OVERRIDE:-$MAPS_BACKGROUND_OUTSIDE_RADIUS_FRACTION}"
+  [[ -n "$fraction" ]] || { echo "Missing background fraction" >&2; exit 1; }
+  [[ -n "$outside_radius" ]] || { echo "Missing background outside-radius fraction" >&2; exit 1; }
+  local outdir="$MAPSDIR"
+  echo "Computing flat background maps at fraction=$fraction outside_radius=$outside_radius"
+  "$PYTHON" "$SCRIPT_DIR/tools.py" maps-background \
+    "$REAL_MAPSDIR/maps_manifest.tsv" "$outdir" "$fraction" "$outside_radius"
+  date -u +%FT%TZ > "$MAPSDIR/.background_complete"
+  echo "Wrote $REAL_MAPSDIR/maps_background_manifest.tsv"
+}
+
 cheese_stage_complete() {
   local manifest="$REAL_CHEESEDIR/cheese_manifest.tsv"
-  local header has_detmask=0
-  local inst label base source_list global_region base_mask detmask cheesemask cheesed_counts cheesed_exp_vig
+  local header
+  local inst label base source_list global_region base_mask cheesemask cheesed_counts cheesed_exp_vig
   local have=0
   [[ -s "$REAL_CHEESEDIR/.complete" && -s "$manifest" ]] || return 1
   IFS= read -r header < "$manifest"
-  [[ "$header" == *$'\tdetmask\t'* ]] && has_detmask=1
-  if [[ "$has_detmask" == "1" ]]; then
-    while IFS=$'\t' read -r inst label base source_list global_region base_mask detmask cheesemask cheesed_counts cheesed_exp_vig; do
-      [[ "$inst" == "inst" ]] && continue
-      [[ -n "$inst" ]] || continue
-      have=1
-      for path in "$source_list" "$global_region" "$base_mask" "$cheesemask" "$cheesed_counts" "$cheesed_exp_vig"; do
-        [[ -s "$path" ]] || return 1
-      done
-    done < "$manifest"
-  else
-    while IFS=$'\t' read -r inst label base source_list global_region base_mask cheesemask cheesed_counts cheesed_exp_vig; do
-      [[ "$inst" == "inst" ]] && continue
-      [[ -n "$inst" ]] || continue
-      have=1
-      for path in "$source_list" "$global_region" "$base_mask" "$cheesemask" "$cheesed_counts" "$cheesed_exp_vig"; do
-        [[ -s "$path" ]] || return 1
-      done
-    done < "$manifest"
-  fi
+  while IFS=$'\t' read -r inst label base source_list global_region base_mask cheesemask cheesed_counts cheesed_exp_vig; do
+    [[ "$inst" == "inst" ]] && continue
+    [[ -n "$inst" ]] || continue
+    have=1
+    for path in "$source_list" "$base_mask" "$cheesemask" "$cheesed_counts" "$cheesed_exp_vig"; do
+      [[ -s "$path" ]] || return 1
+    done
+  done < "$manifest"
   [[ "$have" == "1" ]]
 }
 
@@ -1092,42 +1120,97 @@ append_cheese_manifest() {
   printf '\n' >> "$CHEESEDIR/cheese_manifest.tsv"
 }
 
-cheese_global_region_path() {
-  local inst="$1" base="$2"
-  echo "$CHEESEDIR/regions/$inst/$base/${base}_hard_global_region.fits"
+# Per-(inst, base) source-detection products on the maps grid, grouped
+# under regions/. The semantics in the new pipeline are:
+#   emllist        : emldetect SRCLIST for the cheese band (point sources)
+#   global_region  : SAS region task output (PSF-aware exclusion regions)
+#   base_mask      : binary FOV mask derived from maps hard exposure_vig
+#   cheese_mask    : final per-(inst, base) mask (FOV minus source regions)
+cheese_emllist_path()       { echo "$CHEESEDIR/regions/$1/$2/${2}_hard_emllist.fits"; }
+cheese_global_region_path() { echo "$CHEESEDIR/regions/$1/$2/${2}_hard_src_region.fits"; }
+cheese_base_mask_path()     { echo "$CHEESEDIR/regions/$1/$2/${2}_hard_fov_mask.fits"; }
+cheese_srconly_mask_path()  { echo "$CHEESEDIR/regions/$1/$2/${2}_hard_src_mask.fits"; }
+cheese_regmask_path()       { echo "$CHEESEDIR/regions/$1/$2/${2}_hard_cheese_mask.fits"; }
+
+# Look up maps-stage products for the hard band on (inst, base). The maps
+# manifest columns (1-indexed) are:
+#   inst band base event counts exposure_vig exposure_unvig
+cheese_maps_counts() {
+  awk -F'\t' -v inst="$1" -v base="$2" \
+    'NR>1 && $1==inst && $2=="hard" && $3==base {print $5; exit}' \
+    "$MAPSDIR/maps_manifest.tsv"
 }
 
-cheese_base_mask_path() {
-  local inst="$1" base="$2"
-  echo "$CHEESEDIR/regions/$inst/$base/${base}_hard_base_mask.fits"
+cheese_maps_exp_vig() {
+  awk -F'\t' -v inst="$1" -v base="$2" \
+    'NR>1 && $1==inst && $2=="hard" && $3==base {print $6; exit}' \
+    "$MAPSDIR/maps_manifest.tsv"
+}
+
+cheese_maps_event() {
+  awk -F'\t' -v inst="$1" -v base="$2" \
+    'NR>1 && $1==inst && $2=="hard" && $3==base {print $4; exit}' \
+    "$MAPSDIR/maps_manifest.tsv"
+}
+
+cheese_inst_id() {
+  case "$1" in
+    PN) echo 1 ;;
+    M1) echo 2 ;;
+    M2) echo 3 ;;
+    *)  echo 0 ;;
+  esac
+}
+
+cheese_inst_ecf() {
+  case "$1" in
+    PN) echo "$CHEESE_ECF_PN" ;;
+    *)  echo "$CHEESE_ECF_MOS" ;;
+  esac
+}
+
+# Convert config FLUX threshold (in 1e-14 cgs units) to the cgs value the
+# region task / emldetect SRCLIST FLUX column use.
+cheese_flux_cgs() {
+  awk -v f="$CHEESE_FLUX" 'BEGIN{printf "%.6e", f*1e-14}'
 }
 
 drop_cheese_from() {
   local step="$1"
   [[ -z "$step" ]] && return 0
   case "$step" in
-    regions|mask|images) ;;
-    *) echo "Unknown cheese rerun step: $step" >&2; exit 2 ;;
+    detect|regions|mask|images) ;;
+    *) echo "Unknown cheese rerun step: $step (expected: detect|regions|mask|images)" >&2; exit 2 ;;
   esac
 
   shopt -s globstar nullglob
   rm -f "$CHEESEDIR/.complete" "$CHEESEDIR/cheese_manifest.tsv"
 
   case "$step" in
+    detect)
+      # Re-run emldetect, region, regionmask, and all downstream products.
+      rm -rf "$CHEESEDIR"/inputs   # legacy from older versions; no longer produced
+      rm -f "$CHEESEDIR"/regions/*/*/*_hard_emllist.fits
+      rm -f "$CHEESEDIR"/regions/*/*/*_hard_src_region.fits
+      rm -f "$CHEESEDIR"/regions/*/*/*_hard_cheese_mask.fits
+      rm -f "$CHEESEDIR"/**/*_cheesed_counts.fits
+      rm -f "$CHEESEDIR"/**/*_cheesed_exp_vig.fits
+      ;;
     regions)
-      rm -f "$CHEESEDIR"/regions/*/*/*_hard_global_region.fits
-      rm -f "$CHEESEDIR"/regions/*/*/*_hard_base_mask.fits
-      rm -f "$CHEESEDIR"/regions/*/*/*_region_tmp.fits
-      rm -f "$CHEESEDIR"/**/*_cheesemask.fits
+      # Keep emllist; rebuild region table, mask, and cheesed images.
+      rm -f "$CHEESEDIR"/regions/*/*/*_hard_src_region.fits
+      rm -f "$CHEESEDIR"/regions/*/*/*_hard_cheese_mask.fits
       rm -f "$CHEESEDIR"/**/*_cheesed_counts.fits
       rm -f "$CHEESEDIR"/**/*_cheesed_exp_vig.fits
       ;;
     mask)
-      rm -f "$CHEESEDIR"/**/*_cheesemask.fits
+      # Keep emllist + region table; rebuild final mask and cheesed images.
+      rm -f "$CHEESEDIR"/regions/*/*/*_hard_cheese_mask.fits
       rm -f "$CHEESEDIR"/**/*_cheesed_counts.fits
       rm -f "$CHEESEDIR"/**/*_cheesed_exp_vig.fits
       ;;
     images)
+      # Just re-apply the existing cheese mask to every band.
       rm -f "$CHEESEDIR"/**/*_cheesed_counts.fits
       rm -f "$CHEESEDIR"/**/*_cheesed_exp_vig.fits
       ;;
@@ -1135,10 +1218,39 @@ drop_cheese_from() {
   shopt -u globstar nullglob
 }
 
+# ----------------------------------------------------------------------
+# stage_cheese
+#
+# Build per-(inst, base) point-source exclusion masks following the SAS
+# source-detection chain (edetect_chain / ESAS cheese recipe), then apply
+# them to every map-stage band image.
+#
+# Steps per (inst, base) on the maps grid:
+#   1. emldetect    -- max-likelihood point-source fitting on the maps
+#                      hard-band counts/exp_vig/background, seeded by the
+#                      maps eboxdetect map-mode source list.
+#   2. region       -- PSF-aware contour exclusion regions in (X,Y) sky
+#                      coords using radiusstyle=contour and bkgfraction.
+#   3. fov-mask     -- binary mask from maps hard exp_vig (>0).
+#   4. regionmask   -- subtract source regions from the FOV mask -> the
+#                      per-(inst, base) cheese mask. Falls back to a
+#                      Python fixed-radius painter (cheese-mask) only if
+#                      region/regionmask fail.
+#
+# Then for every (inst, label, base) row in the maps manifest, the same
+# cheese mask is applied to that band's counts and exposure_vig images.
+#
+# Per-frame eboxdetect/esplinemap is NOT redone here; the maps stage
+# already produces the hard-band local/map source lists and the spline
+# background that emldetect needs.
+# ----------------------------------------------------------------------
 stage_cheese() {
-  local inst base bands source_list source_table source_expr hard_event hard_counts global_region base_mask tmp_region
-  local label map_event counts exp_vig exp_unvig outdir cheesemask cheesed_counts cheesed_exp_vig
-  local maps_extra
+  local inst base bands source_list
+  local maps_hard_counts maps_hard_exp_vig maps_hard_bkg maps_hard_event
+  local eml_list src_region fov_mask src_mask cheesemask
+  local label map_event counts exp_vig exp_unvig outdir
+  local cheesed_counts cheesed_exp_vig maps_extra
+  local ecf id_inst flux_cgs eml_rc reg_rc
 
   if ! maps_stage_complete; then
     stage_maps
@@ -1150,84 +1262,183 @@ stage_cheese() {
   fi
 
   set_sas_clean_env
+  need_cmd emldetect
   need_cmd region
   need_cmd regionmask
 
+  [[ -s "$REAL_MAPSDIR/grid.env" ]] || {
+    echo "Missing maps grid env: $REAL_MAPSDIR/grid.env" >&2; exit 1; }
+  [[ -s "$MAPSDIR/source_manifest.tsv" ]] || {
+    echo "Missing maps source manifest: $MAPSDIR/source_manifest.tsv" >&2; exit 1; }
+  [[ -s "$MAPSDIR/maps_manifest.tsv" ]] || {
+    echo "Missing maps manifest: $MAPSDIR/maps_manifest.tsv" >&2; exit 1; }
+
   if [[ "$FORCE" == "1" ]]; then
-    drop_cheese_from regions
+    drop_cheese_from detect
   else
     drop_cheese_from "$CHEESE_RERUN_FROM"
   fi
 
   write_cheese_manifest_header
 
+  # ---------- Per (inst, base): build the cheese mask ----------
   while IFS=$'\t' read -r inst base bands source_list; do
     [[ "$inst" == "inst" ]] && continue
-    [[ -n "$inst" && -n "$base" && -n "$source_list" ]] || continue
-    [[ -s "$source_list" ]] || { echo "Missing hard-band source list: $source_list" >&2; exit 1; }
+    [[ -n "$inst" && -n "$base" ]] || continue
 
-    source_table="$(fits_table_hdu "$source_list" SRCLIST)"
-    source_expr=""
-    if [[ -n "$MAP_SOURCE_DETECTION_IDBAND" ]] && fits_table_has_column "$source_list" "$source_table" ID_BAND; then
-      source_expr="ID_BAND == $MAP_SOURCE_DETECTION_IDBAND"
+    maps_hard_counts="$(cheese_maps_counts "$inst" "$base")"
+    maps_hard_exp_vig="$(cheese_maps_exp_vig "$inst" "$base")"
+    maps_hard_bkg="$(source_bkg_path "$inst" "$base" hard)"
+    maps_hard_event="$(cheese_maps_event "$inst" "$base")"
+    [[ -s "$maps_hard_counts" ]] || { echo "Missing maps hard counts for $inst/$base" >&2; exit 1; }
+    [[ -s "$maps_hard_exp_vig" ]] || { echo "Missing maps hard exp_vig for $inst/$base" >&2; exit 1; }
+    [[ -s "$maps_hard_bkg" ]] || { echo "Missing maps hard bkg for $inst/$base: $maps_hard_bkg" >&2; exit 1; }
+    [[ -s "$maps_hard_event" ]] || { echo "Missing maps hard event list for $inst/$base: $maps_hard_event" >&2; exit 1; }
+    [[ -s "$source_list" ]] || { echo "Missing maps hard eboxdetect list for $inst/$base: $source_list" >&2; exit 1; }
+
+    eml_list="$(cheese_emllist_path "$inst" "$base")"
+    src_region="$(cheese_global_region_path "$inst" "$base")"
+    fov_mask="$(cheese_base_mask_path "$inst" "$base")"
+    src_mask="$(cheese_srconly_mask_path "$inst" "$base")"
+    cheesemask="$(cheese_regmask_path "$inst" "$base")"
+    mkdir -p "$(dirname "$eml_list")"
+
+    ecf="$(cheese_inst_ecf "$inst")"
+    id_inst="$(cheese_inst_id "$inst")"
+    flux_cgs="$(cheese_flux_cgs)"
+
+    # 1. emldetect on the maps hard band (point sources, single band).
+    # NB: mlmin here is the *fit* threshold; the final source filter is
+    # CHEESE_MLMIN, applied later in the region call. Use a permissive
+    # 5.0 so refit DET_ML excursions don't drop boxes prematurely.
+    eml_rc=0
+    if [[ "$FORCE" == "1" || ! -s "$eml_list" ]]; then
+      rm -f "$eml_list"
+      set +e
+      runlog "cheese_${inst}_${base}_emldetect" \
+        emldetect \
+          imagesets="$maps_hard_counts" \
+          expimagesets="$maps_hard_exp_vig" withexpimage=yes \
+          bkgimagesets="$maps_hard_bkg" \
+          boxlistset="$source_list" \
+          mllistset="$eml_list" \
+          mlmin=5.0 \
+          pimin="$CHEESE_EMIN" pimax="$CHEESE_EMAX" \
+          ecf="$ecf" \
+          psfmodel=ellbeta usecalpsf=yes \
+          determineerrors=yes fitposition=yes \
+          fitextent=yes extentmodel=beta \
+          dmlextmin=6 minextent=1.5 maxextent=20 \
+          nmaxfit=1 nmulsou=1 \
+          withtwostage=no \
+          fitcounts=yes fitnegative=no useevents=no
+      eml_rc=$?
+      set -e
     fi
 
-    hard_event="$MAPSDIR/events/hard/$inst/${base}_hard_map_events.fits"
-    hard_counts="$MAPSDIR/hard/$inst/$base/${base}_hard_counts.fits"
-    [[ -s "$hard_event" ]] || { echo "Missing hard-band map event file: $hard_event" >&2; exit 1; }
-    [[ -s "$hard_counts" ]] || { echo "Missing hard-band counts image: $hard_counts" >&2; exit 1; }
-
-    global_region="$(cheese_global_region_path "$inst" "$base")"
-    base_mask="$(cheese_base_mask_path "$inst" "$base")"
-    tmp_region="$(dirname "$global_region")/${base}_region_tmp.fits"
-    mkdir -p "$(dirname "$global_region")"
-
-    if [[ "$FORCE" == "1" || ! -s "$global_region" ]]; then
-      local -a region_args=(
-        eventset="$hard_event"
-        tempset="$tmp_region"
-        srclisttab="${source_list}:${source_table}"
-        operationstyle=global
-        outunit=xy
-        bkgregionset="$global_region"
-      )
-      if [[ -n "$source_expr" ]]; then
-        region_args+=(expression="$source_expr")
+    # 2. region: PSF-aware contour exclusion regions in sky (xy) coords.
+    #    The region task needs an event file for instrument/exposure/WCS info
+    #    and operationstyle=global to read all sources matching `expression`
+    #    from the SRCLIST in one shot. Filter on CHEESE_MLMIN here.
+    reg_rc=0
+    if [[ $eml_rc -eq 0 && -s "$eml_list" ]]; then
+      if [[ "$FORCE" == "1" || ! -s "$src_region" ]]; then
+        rm -f "$src_region"
+        set +e
+        runlog "cheese_${inst}_${base}_region" \
+          region \
+            eventset="$maps_hard_event" \
+            operationstyle=global \
+            srclisttab="${eml_list}:SRCLIST" \
+            expression="(ID_INST==${id_inst})&&(ID_BAND==1)&&(DET_ML>=${CHEESE_MLMIN})" \
+            radiusstyle=contour \
+            bkgratestyle=col bkgratecol=BG_MAP \
+            bkgfraction="$CHEESE_REGION_BKGFRACTION" \
+            outunit=xy \
+            regionset="$src_region"
+        reg_rc=$?
+        set -e
       fi
-      runlog "cheese_${inst}_${base}_region" \
-        region "${region_args[@]}"
-      rm -f "$tmp_region"
+    else
+      reg_rc=1
     fi
 
-    if [[ "$FORCE" == "1" || ! -s "$base_mask" ]]; then
-      runlog "cheese_${inst}_${base}_regionmask" \
-        regionmask region="${global_region}:REGION" autosize=no \
-          withmaskset=yes maskset="$base_mask" \
-          whichpixdef=image pixdefset="$hard_counts"
+    # 3. FOV mask from maps hard exp_vig (>0 -> 1, else 0).
+    if [[ "$FORCE" == "1" || ! -s "$fov_mask" ]]; then
+      runlog "cheese_${inst}_${base}_fov_mask" \
+        "$PYTHON" "$SCRIPT_DIR/tools.py" fov-mask "$maps_hard_exp_vig" "$fov_mask"
     fi
+
+    # 4. regionmask: paint the source regions onto an image with the FOV
+    #    WCS to produce a source-only mask. Then subtract from FOV in Python
+    #    to make the final cheese mask.
+    local rmask_rc=0
+    local mask_built=0
+    if [[ $reg_rc -eq 0 && -s "$src_region" ]]; then
+      if [[ "$FORCE" == "1" || ! -s "$src_mask" ]]; then
+        rm -f "$src_mask"
+        set +e
+        runlog "cheese_${inst}_${base}_regionmask" \
+          regionmask \
+            region="${src_region}:REGION" \
+            withmaskset=yes \
+            maskset="$src_mask" \
+            whichpixdef=image \
+            pixdefset="$fov_mask"
+        rmask_rc=$?
+        set -e
+      fi
+      if [[ $rmask_rc -eq 0 && -s "$src_mask" ]]; then
+        if [[ "$FORCE" == "1" || ! -s "$cheesemask" ]]; then
+          runlog "cheese_${inst}_${base}_mask_subtract" \
+            "$PYTHON" "$SCRIPT_DIR/tools.py" mask-subtract \
+              "$fov_mask" "$src_mask" "$cheesemask"
+        fi
+        [[ -s "$cheesemask" ]] && mask_built=1
+      fi
+    fi
+
+    # Fallback: if region/regionmask did not produce a mask, paint
+    # fixed-radius holes from the SRCLIST onto the FOV mask in Python.
+    if [[ "$mask_built" != "1" ]]; then
+      if [[ -s "$eml_list" ]]; then
+        echo "region/regionmask failed for $inst/$base; falling back to fixed-radius cheese-mask" >&2
+        runlog "cheese_${inst}_${base}_cheese_mask_fallback" \
+          "$PYTHON" "$SCRIPT_DIR/tools.py" cheese-mask \
+            "$eml_list" "$maps_hard_exp_vig" "$cheesemask" \
+            "$id_inst" 1 "$CHEESE_MLMIN" "$CHEESE_FLUX" "$CHEESE_SOURCE_RADIUS_PIX"
+      else
+        echo "emldetect produced no SRCLIST for $inst/$base; using FOV-only mask" >&2
+        cp -f "$fov_mask" "$cheesemask"
+      fi
+    fi
+
+    [[ -s "$cheesemask" ]] || { echo "Failed to produce cheese mask for $inst/$base" >&2; exit 1; }
   done < "$MAPSDIR/source_manifest.tsv"
 
+  # ---------- Per (inst, label, base): apply the cheese mask ----------
   while IFS=$'\t' read -r inst label base map_event counts exp_vig exp_unvig maps_extra; do
     [[ "$inst" == "inst" ]] && continue
     [[ -n "$inst" && -n "$label" && -n "$base" ]] || continue
-    source_list="$(source_list_path "$inst" "$base")"
-    global_region="$(cheese_global_region_path "$inst" "$base")"
-    base_mask="$(cheese_base_mask_path "$inst" "$base")"
 
-    [[ -s "$source_list" ]] || { echo "Missing hard-band source list: $source_list" >&2; exit 1; }
-    [[ -s "$global_region" ]] || { echo "Missing hard-band global region file: $global_region" >&2; exit 1; }
-    [[ -s "$base_mask" ]] || { echo "Missing hard-band base mask: $base_mask" >&2; exit 1; }
+    cheesemask="$(cheese_regmask_path "$inst" "$base")"
+    src_region="$(cheese_global_region_path "$inst" "$base")"
+    fov_mask="$(cheese_base_mask_path "$inst" "$base")"
+    eml_list="$(cheese_emllist_path "$inst" "$base")"
+    if [[ -s "$eml_list" ]]; then
+      source_list="$eml_list"
+    else
+      source_list="$(source_list_path "$inst" "$base")"
+    fi
+    [[ -s "$cheesemask" ]] || { echo "Missing cheese mask: $cheesemask" >&2; exit 1; }
+    [[ -s "$source_list" ]] || { echo "Missing source list for $inst/$base" >&2; exit 1; }
+    [[ -s "$src_region" ]] || src_region=""
 
     outdir="$CHEESEDIR/$label/$inst/$base"
     mkdir -p "$outdir"
-    cheesemask="$outdir/${base}_${label}_cheesemask.fits"
     cheesed_counts="$outdir/${base}_${label}_cheesed_counts.fits"
     cheesed_exp_vig="$outdir/${base}_${label}_cheesed_exp_vig.fits"
 
-    if [[ "$FORCE" == "1" || ! -s "$cheesemask" ]]; then
-      runlog "cheese_${label}_${inst}_${base}_mask" \
-        cp -f "$base_mask" "$cheesemask"
-    fi
     if [[ "$FORCE" == "1" || ! -s "$cheesed_counts" ]]; then
       runlog "cheese_${label}_${inst}_${base}_counts" \
         "$PYTHON" "$SCRIPT_DIR/tools.py" apply-image-mask "$counts" "$cheesemask" "$cheesed_counts" image
@@ -1237,7 +1448,8 @@ stage_cheese() {
         "$PYTHON" "$SCRIPT_DIR/tools.py" apply-image-mask "$exp_vig" "$cheesemask" "$cheesed_exp_vig" image
     fi
 
-    append_cheese_manifest "$inst" "$label" "$base" "$source_list" "$global_region" "$base_mask" "$cheesemask" "$cheesed_counts" "$cheesed_exp_vig"
+    append_cheese_manifest "$inst" "$label" "$base" \
+      "$source_list" "$src_region" "$fov_mask" "$cheesemask" "$cheesed_counts" "$cheesed_exp_vig"
   done < "$MAPSDIR/maps_manifest.tsv"
 
   date -u +%FT%TZ > "$CHEESEDIR/.complete"
@@ -1407,8 +1619,13 @@ qc_maps() {
   [[ -s "$MAPSDIR/maps_band_table.tsv" ]] && cp -f "$MAPSDIR/maps_band_table.tsv" "$qcdir/maps_band_table.tsv"
   [[ -s "$MAPSDIR/source_manifest.tsv" ]] && cp -f "$MAPSDIR/source_manifest.tsv" "$qcdir/source_manifest.tsv"
   [[ -s "$MAPSDIR/maps_manifest.tsv" ]] && cp -f "$MAPSDIR/maps_manifest.tsv" "$qcdir/maps_manifest.tsv"
+  [[ -s "$MAPSDIR/maps_background_manifest.tsv" ]] && cp -f "$MAPSDIR/maps_background_manifest.tsv" "$qcdir/maps_background_manifest.tsv"
   if [[ -s "$REAL_MAPSDIR/maps_manifest.tsv" ]]; then
-    "$PYTHON" "$SCRIPT_DIR/tools.py" maps-qc "$REAL_MAPSDIR/maps_manifest.tsv" "$qcdir"
+    if [[ -s "$REAL_MAPSDIR/maps_background_manifest.tsv" ]]; then
+      "$PYTHON" "$SCRIPT_DIR/tools.py" maps-qc "$REAL_MAPSDIR/maps_manifest.tsv" "$qcdir" "$REAL_MAPSDIR/maps_background_manifest.tsv"
+    else
+      "$PYTHON" "$SCRIPT_DIR/tools.py" maps-qc "$REAL_MAPSDIR/maps_manifest.tsv" "$qcdir"
+    fi
   fi
 
   echo "Wrote $files"
@@ -1422,39 +1639,72 @@ qc_maps() {
 }
 
 qc_cheese() {
-  local qcdir="$WORKDIR/qc/cheese" files="$WORKDIR/qc/cheese/output_files.txt"
-  local counts="$WORKDIR/qc/cheese/file_type_counts.txt" status="$WORKDIR/qc/cheese/status.txt"
+  local qcdir="$WORKDIR/qc/cheese"
+  local files="$qcdir/output_files.txt"
+  local status="$qcdir/status.txt"
+  local manifest="$REAL_CHEESEDIR/cheese_manifest.tsv"
+  local n_frames n_sources_total
   [[ -d "$CHEESEDIR" ]] || { echo "Missing cheese output directory: $CHEESEDIR" >&2; exit 1; }
   mkdir -p "$qcdir"
 
+  # Trimmed file listing: only the products that matter (per-frame
+  # emllist / region / FOV mask / cheese mask under regions/, and the
+  # per-band cheesed_counts / cheesed_exp_vig under <label>/), plus
+  # cheese_*.log entries. The full recursive find of every artefact
+  # was noise.
   {
-    find "$CHEESEDIR" -maxdepth 6 \( -type f -o -type l \) | sort
+    find "$CHEESEDIR/regions" -maxdepth 4 -type f \
+      \( -name '*_hard_emllist.fits' \
+      -o -name '*_hard_src_region.fits' \
+      -o -name '*_hard_fov_mask.fits' \
+      -o -name '*_hard_cheese_mask.fits' \) 2>/dev/null | sort
+    find "$CHEESEDIR" -mindepth 3 -maxdepth 4 -type f \
+      \( -name '*_cheesed_counts.fits' -o -name '*_cheesed_exp_vig.fits' \) \
+      -not -path "$CHEESEDIR/regions/*" 2>/dev/null | sort
     [[ -d "$LOGDIR" ]] && find "$LOGDIR" -maxdepth 1 -type f -name 'cheese_*.log' | sort
   } > "$files"
 
-  while IFS= read -r path; do
-    file_type "$(basename "$path")"
-  done < "$files" | sort | uniq -c | awk '{ printf "%s %s\n", $2, $1 }' > "$counts"
-
+  # Stage status + headline counts. cheese_per_frame.tsv (written by
+  # tools.py cheese-qc below) holds the per-(inst, band, base) detail.
   {
     if cheese_stage_complete; then
       echo "cheese_stage complete"
     else
       echo "cheese_stage missing_or_stale"
     fi
-    [[ -s "$REAL_CHEESEDIR/cheese_manifest.tsv" ]] && echo "cheese_manifest.tsv $(($(count_lines "$REAL_CHEESEDIR/cheese_manifest.tsv") - 1))" || echo "cheese_manifest.tsv missing"
+    if [[ -s "$manifest" ]]; then
+      n_frames=$(($(count_lines "$manifest") - 1))
+      echo "cheese_manifest.tsv ${n_frames}"
+    else
+      echo "cheese_manifest.tsv missing"
+    fi
+    n_sources_total=0
+    if [[ -d "$CHEESEDIR/regions" ]]; then
+      while IFS= read -r eml; do
+        [[ -s "$eml" ]] || continue
+        local n
+        n="$("$PYTHON" "$SCRIPT_DIR/tools.py" fits-rows "$eml" 2>/dev/null | tr -dc '0-9')"
+        [[ -z "$n" ]] && n=0
+        n_sources_total=$((n_sources_total + n))
+      done < <(find "$CHEESEDIR/regions" -maxdepth 4 -type f -name '*_hard_emllist.fits' 2>/dev/null | sort)
+    fi
+    echo "emldetect_sources_total ${n_sources_total}"
   } > "$status"
 
-  [[ -s "$CHEESEDIR/cheese_manifest.tsv" ]] && cp -f "$CHEESEDIR/cheese_manifest.tsv" "$qcdir/cheese_manifest.tsv"
-  if [[ -s "$REAL_CHEESEDIR/cheese_manifest.tsv" ]]; then
-    "$PYTHON" "$SCRIPT_DIR/tools.py" cheese-qc "$REAL_CHEESEDIR/cheese_manifest.tsv" "$qcdir"
+  [[ -s "$manifest" ]] && cp -f "$manifest" "$qcdir/cheese_manifest.tsv"
+
+  # Mosaics + per-frame TSV + source overlay. cheese-qc reads the maps
+  # manifest to mosaic the un-excised counts under the red-overlay of
+  # excluded pixels and to gate the overlay by per-frame FOV.
+  if [[ -s "$manifest" ]]; then
+    "$PYTHON" "$SCRIPT_DIR/tools.py" cheese-qc "$manifest" "$qcdir" "$REAL_MAPSDIR/maps_manifest.tsv"
   fi
 
   echo "Wrote $files"
-  echo "Wrote $counts"
   echo "Wrote $status"
   [[ -s "$qcdir/cheese_manifest.tsv" ]] && echo "Wrote $qcdir/cheese_manifest.tsv"
-  [[ -s "$qcdir/cheese_qc_summary.tsv" ]] && echo "Wrote $qcdir/*_mosaic.png"
+  [[ -s "$qcdir/cheese_per_frame.tsv" ]] && echo "Wrote $qcdir/cheese_per_frame.tsv"
+  [[ -s "$qcdir/cheese_qc_summary.tsv" ]] && echo "Wrote $qcdir/cheese_qc_summary.tsv (mosaics + overlay PNGs)"
 }
 
 run_qc_stage() {
@@ -1463,6 +1713,7 @@ run_qc_stage() {
     repro) qc_repro ;;
     clean) qc_clean ;;
     maps) qc_maps ;;
+    maps-background) qc_maps ;;
     cheese) qc_cheese ;;
     all|qc) qc_init; qc_repro; qc_clean; qc_maps; qc_cheese ;;
     *) echo "No QC stage for: $1" >&2; exit 2 ;;
@@ -1479,6 +1730,7 @@ case "$STAGE" in
   repro) stage_repro; maybe_run_qc ;;
   clean) stage_clean; maybe_run_qc ;;
   maps) stage_maps; maybe_run_qc ;;
+  maps-background) stage_maps_background; maybe_run_qc ;;
   cheese) stage_cheese; maybe_run_qc ;;
   all) stage_init; stage_repro; stage_clean; stage_maps; stage_cheese; maybe_run_qc ;;
   qc-init) qc_init ;;
