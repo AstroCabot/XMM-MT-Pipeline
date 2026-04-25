@@ -107,6 +107,26 @@
     }
   ],
 
+  "map_bin_phys": 80,
+  "map_pad_frac": 0.08,
+  "map_soft_hard_split_ev": 1000,
+  "map_pi_min": 201,
+  "map_pi_max": 12000,
+  "map_eexpmap_attrebin": "0.020626481",
+  "map_source_detection_bands": ["hard"],
+  "map_source_detection_idband": 1,
+  "map_ebox_likemin_local": 8,
+  "map_ebox_boxsize": 5,
+  "map_ebox_nruns": 3,
+  "map_bkg_fitmethod": "model",
+  "map_bkg_mlmin": 1,
+  "map_bkg_scut": 0.01,
+  "map_bkg_nsplinenodes": 12,
+  "map_bkg_nfitrun": 3,
+  "map_bkg_excesssigma": 4,
+  "map_bkg_snrmin": 30,
+  "map_bkg_smoothsigma": 6,
+
   "link_odf_constituents": true,
   "skip_odf_link_patterns": [
     "*.gz.gpg",

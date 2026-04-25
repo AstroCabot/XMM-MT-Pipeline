@@ -73,6 +73,11 @@ def emit(name: str, value: Any) -> None:
 
 def shell(path: str) -> None:
     cfg = load_config(path)
+    source_bands = cfg.get("map_source_detection_bands", ["3000", "4000", "5000"])
+    if isinstance(source_bands, list):
+        source_bands_text = " ".join(str(item) for item in source_bands)
+    else:
+        source_bands_text = str(source_bands)
     values = {
         "WORKDIR": str(cfg["workdir"]).rstrip("/"),
         "ODFDIR": str(cfg["odfdir"]).rstrip("/"),
@@ -91,6 +96,25 @@ def shell(path: str) -> None:
         "CLEAN_GTI_PI_MIN": cfg.get("clean_gti_pi_min", 7000),
         "CLEAN_GTI_PI_MAX": cfg.get("clean_gti_pi_max", 15000),
         "CLEAN_GTI_PATTERN_MAX": cfg.get("clean_gti_pattern_max", 0),
+        "MAP_BIN_PHYS": cfg.get("map_bin_phys", 80),
+        "MAP_PAD_FRAC": cfg.get("map_pad_frac", 0.08),
+        "MAP_SOFT_HARD_SPLIT_EV": cfg.get("map_soft_hard_split_ev", cfg.get("qc_soft_hard_split_ev", 1000)),
+        "MAP_PI_MIN": cfg.get("map_pi_min", 201),
+        "MAP_PI_MAX": cfg.get("map_pi_max", 12000),
+        "MAP_EEXPMAP_ATTREBIN": cfg.get("map_eexpmap_attrebin", "0.020626481"),
+        "MAP_SOURCE_DETECTION_BANDS": source_bands_text,
+        "MAP_SOURCE_DETECTION_IDBAND": cfg.get("map_source_detection_idband", 0),
+        "MAP_EBOX_LIKEMIN_LOCAL": cfg.get("map_ebox_likemin_local", 8),
+        "MAP_EBOX_BOXSIZE": cfg.get("map_ebox_boxsize", 5),
+        "MAP_EBOX_NRUNS": cfg.get("map_ebox_nruns", 3),
+        "MAP_BKG_FITMETHOD": cfg.get("map_bkg_fitmethod", "model"),
+        "MAP_BKG_MLMIN": cfg.get("map_bkg_mlmin", 1),
+        "MAP_BKG_SCUT": cfg.get("map_bkg_scut", 0.01),
+        "MAP_BKG_NSPLINENODES": cfg.get("map_bkg_nsplinenodes", 12),
+        "MAP_BKG_NFITRUN": cfg.get("map_bkg_nfitrun", 3),
+        "MAP_BKG_EXCESSSIGMA": cfg.get("map_bkg_excesssigma", 4),
+        "MAP_BKG_SNRMIN": cfg.get("map_bkg_snrmin", 30),
+        "MAP_BKG_SMOOTHSIGMA": cfg.get("map_bkg_smoothsigma", 6),
         "LINK_ODF_CONSTITUENTS": yesno(cfg.get("link_odf_constituents"), True),
         "SKIP_ODF_LINK_PATTERNS": "|".join(cfg.get("skip_odf_link_patterns", [])),
     }
@@ -200,12 +224,12 @@ def pattern_expr(spec: dict[str, Any]) -> str:
     return f"((PATTERN>={pmin})&&(PATTERN<={pmax}))"
 
 
-def band_expression(band: dict[str, Any], detector: str) -> str:
+def band_expression(band: dict[str, Any], detector: str, ranges: list[list[Any]] | None = None) -> str:
     family = detector_family(detector)
     spec = band.get(family, {})
     if not isinstance(spec, dict):
         die(f"Band {band.get('label', '')} is missing {family} filter settings")
-    terms = [pi_expr(band["pi_ranges"]), pattern_expr(spec)]
+    terms = [pi_expr(ranges if ranges is not None else band["pi_ranges"]), pattern_expr(spec)]
     flag = str(spec.get("flag", "")).strip()
     if flag:
         terms.append(flag if flag.startswith("#") else f"({flag})")
@@ -241,6 +265,162 @@ def clean_band_table(path: str) -> None:
         pn = clean_expression_text(path, "PN", label)
         mos = clean_expression_text(path, "M1", label)
         print(f"{label}\t{desc}\t{pn}\t{mos}")
+
+
+def band_pi_bounds(band: dict[str, Any]) -> tuple[int, int]:
+    override = band.get("exposure_pi_range")
+    ranges = override if override is not None else band["pi_ranges"]
+    if isinstance(ranges, list) and len(ranges) == 2 and not isinstance(ranges[0], list):
+        ranges = [ranges]
+    if not isinstance(ranges, list) or not ranges:
+        die(f"Band {band.get('label', '')} has bad exposure_pi_range")
+    bounds: list[tuple[int, int]] = []
+    for item in ranges:
+        if not isinstance(item, list) or len(item) != 2:
+            die(f"Band {band.get('label', '')} has bad PI range: {item}")
+        bounds.append((int(item[0]), int(item[1])))
+    return min(lo for lo, _hi in bounds), max(hi for _lo, hi in bounds)
+
+
+def maps_band_table(path: str) -> None:
+    print("label\tdescription\tpimin\tpimax")
+    for band in map_bands(path):
+        print(f"{band['label']}\t{band['description']}\t{band['pimin']}\t{band['pimax']}")
+
+
+def maps_clean_labels(path: str, label: str) -> None:
+    selected = None
+    for band in map_bands(path):
+        if band["label"] == label:
+            selected = band
+            break
+    if selected is None:
+        die(f"Unknown maps band label: {label}")
+
+    lo, hi = int(selected["pimin"]), int(selected["pimax"])
+    for band in clean_bands(path):
+        if intersect_pi_ranges(band["pi_ranges"], lo, hi):
+            print(band["label"])
+
+
+def map_pi_limits(cfg: dict[str, Any]) -> tuple[int, int]:
+    bands = clean_bands_from_config(cfg)
+    pimin = min(int(lo) for band in bands for lo, _hi in band["pi_ranges"])
+    pimax = max(int(hi) for band in bands for _lo, hi in band["pi_ranges"])
+    return int(cfg.get("map_pi_min", pimin)), int(cfg.get("map_pi_max", pimax))
+
+
+def clean_bands_from_config(cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    pathless = dict(cfg)
+    tmp = Path("__unused_config_path__")
+    # Reuse clean_bands validation without exposing a second schema path.
+    bands = pathless.get("clean_bands", [])
+    if not isinstance(bands, list) or not bands:
+        die("Missing non-empty clean_bands list in config")
+    return bands
+
+
+def map_bands(path: str) -> list[dict[str, Any]]:
+    cfg = load_config(path)
+    pimin, pimax = map_pi_limits(cfg)
+    split = int(cfg.get("map_soft_hard_split_ev", cfg.get("qc_soft_hard_split_ev", 1000)))
+    if not (pimin <= split < pimax):
+        die("map_soft_hard_split_ev must fall between map_pi_min and map_pi_max")
+    return [
+        {"label": "soft", "description": f"{pimin}-{split} eV", "pimin": pimin, "pimax": split},
+        {"label": "hard", "description": f"{split + 1}-{pimax} eV", "pimin": split + 1, "pimax": pimax},
+    ]
+
+
+def intersect_pi_ranges(ranges: list[list[Any]], lo: int, hi: int) -> list[list[int]]:
+    out: list[list[int]] = []
+    for item in ranges:
+        rlo, rhi = int(item[0]), int(item[1])
+        ilo, ihi = max(rlo, lo), min(rhi, hi)
+        if ilo <= ihi:
+            out.append([ilo, ihi])
+    return out
+
+
+def maps_expression_text(path: str, detector: str, label: str) -> str:
+    selected = None
+    for band in map_bands(path):
+        if band["label"] == label:
+            selected = band
+            break
+    if selected is None:
+        die(f"Unknown maps band label: {label}")
+
+    terms: list[str] = []
+    lo, hi = int(selected["pimin"]), int(selected["pimax"])
+    for band in clean_bands(path):
+        ranges = intersect_pi_ranges(band["pi_ranges"], lo, hi)
+        if ranges:
+            terms.append(f"({band_expression(band, detector, ranges)})")
+    if not terms:
+        die(f"No clean-band filters overlap maps band: {label}")
+    return terms[0] if len(terms) == 1 else "(" + "||".join(terms) + ")"
+
+
+def maps_expression(path: str, detector: str, label: str) -> None:
+    print(maps_expression_text(path, detector, label))
+
+
+def maps_grid(outdir_arg: str, bin_phys_arg: str, pad_frac_arg: str, manifest_dir: str, detectors_arg: str = "PN") -> None:
+    import math
+    import numpy as np
+
+    events = manifest_events(manifest_dir, detectors_arg)
+    xmin = ymin = np.inf
+    xmax = ymax = -np.inf
+    for path in events:
+        hdul, x, y, _pi = event_columns(path)
+        good = valid_sky(x, y)
+        if np.any(good):
+            xmin = min(xmin, float(x[good].min()))
+            xmax = max(xmax, float(x[good].max()))
+            ymin = min(ymin, float(y[good].min()))
+            ymax = max(ymax, float(y[good].max()))
+        hdul.close()
+
+    if not np.isfinite([xmin, xmax, ymin, ymax]).all() or xmin == xmax or ymin == ymax:
+        die("Could not determine a valid map grid from clean event lists")
+
+    bin_phys = float(bin_phys_arg)
+    pad_frac = float(pad_frac_arg)
+    if bin_phys <= 0:
+        die("map_bin_phys must be positive")
+
+    pad_x = max(pad_frac * (xmax - xmin), bin_phys)
+    pad_y = max(pad_frac * (ymax - ymin), bin_phys)
+    xlo = math.floor((xmin - pad_x) / bin_phys) * bin_phys
+    xhi = math.ceil((xmax + pad_x) / bin_phys) * bin_phys
+    ylo = math.floor((ymin - pad_y) / bin_phys) * bin_phys
+    yhi = math.ceil((ymax + pad_y) / bin_phys) * bin_phys
+    nx = int(round((xhi - xlo) / bin_phys))
+    ny = int(round((yhi - ylo) / bin_phys))
+
+    outdir = Path(outdir_arg)
+    outdir.mkdir(parents=True, exist_ok=True)
+    env = [
+        "# Generated by reduction_v6/tools.py maps-grid",
+        f"MAP_GRID_BIN_PHYS={bin_phys:g}",
+        f"MAP_GRID_X_MIN={xlo:g}",
+        f"MAP_GRID_X_MAX={xhi:g}",
+        f"MAP_GRID_Y_MIN={ylo:g}",
+        f"MAP_GRID_Y_MAX={yhi:g}",
+        f"MAP_GRID_NX={nx}",
+        f"MAP_GRID_NY={ny}",
+    ]
+    summary = [
+        f"event_lists\t{len(events)}",
+        f"data_bounds\t{xmin:g}\t{xmax:g}\t{ymin:g}\t{ymax:g}",
+        f"grid_bounds\t{xlo:g}\t{xhi:g}\t{ylo:g}\t{yhi:g}",
+        f"bin_phys\t{bin_phys:g}",
+        f"pixels\t{nx}\t{ny}",
+    ]
+    (outdir / "grid.env").write_text("\n".join(env) + "\n", encoding="utf-8")
+    (outdir / "grid_summary.tsv").write_text("\n".join(summary) + "\n", encoding="utf-8")
 
 
 def event_hdu(hdul):
@@ -304,6 +484,94 @@ def fits_rows(path_arg: str) -> None:
         print(0 if hdu.data is None else len(hdu.data))
 
 
+def fits_table_hdu(path_arg: str, preferred_arg: str = "SRCLIST") -> None:
+    from astropy.io import fits
+
+    path = Path(path_arg)
+    if not path.is_file():
+        die(f"Missing FITS file: {path}")
+    preferred = str(preferred_arg).strip()
+    with fits.open(path, memmap=True) as hdul:
+        for hdu in hdul:
+            if isinstance(hdu, (fits.BinTableHDU, fits.TableHDU)) and hdu.name == preferred:
+                print(hdu.name)
+                return
+        for hdu in hdul:
+            if isinstance(hdu, (fits.BinTableHDU, fits.TableHDU)) and str(hdu.name).strip():
+                print(hdu.name)
+                return
+    die(f"No named table HDU found in {path}")
+
+
+def fits_table_has_column(path_arg: str, table_arg: str, column_arg: str) -> None:
+    from astropy.io import fits
+
+    path = Path(path_arg)
+    if not path.is_file():
+        print("no")
+        return
+    table = str(table_arg).strip()
+    column = str(column_arg).strip().upper()
+    with fits.open(path, memmap=True) as hdul:
+        try:
+            hdu = hdul[table]
+        except Exception:
+            print("no")
+            return
+        names = {str(name).upper() for name in getattr(hdu.columns, "names", [])}
+        print("yes" if column in names else "no")
+
+
+def apply_image_mask(image_arg: str, mask_arg: str, out_arg: str, mode_arg: str = "image") -> None:
+    import numpy as np
+    from astropy.io import fits
+
+    image_path = Path(image_arg)
+    mask_path = Path(mask_arg)
+    out_path = Path(out_arg)
+    mode = str(mode_arg).strip().lower()
+    if mode not in {"image", "mask"}:
+        die("apply-image-mask mode must be image or mask")
+    if not image_path.is_file():
+        die(f"Missing image file: {image_path}")
+    if not mask_path.is_file():
+        die(f"Missing mask file: {mask_path}")
+
+    def first_image(path: Path):
+        hdul = fits.open(path, memmap=True)
+        for idx, hdu in enumerate(hdul):
+            if getattr(hdu, "data", None) is not None:
+                arr = np.asarray(hdu.data)
+                if arr.ndim >= 2 and arr.dtype.kind in {"i", "u", "f"}:
+                    data = np.array(np.squeeze(arr), copy=True)
+                    while data.ndim > 2:
+                        data = data[0]
+                    return hdul, idx, data
+        hdul.close()
+        die(f"No image data found in {path}")
+
+    image_hdul, image_idx, image_data = first_image(image_path)
+    mask_hdul, _mask_idx, mask_data = first_image(mask_path)
+    try:
+        if image_data.shape != mask_data.shape:
+            die(f"Shape mismatch between {image_path} and {mask_path}")
+        mask_bool = np.asarray(mask_data) > 0
+        header = image_hdul[image_idx].header.copy()
+        for key in ("XTENSION", "PCOUNT", "GCOUNT", "EXTNAME"):
+            if key in header:
+                del header[key]
+        if mode == "mask":
+            out_array = (((np.asarray(image_data) > 0) & mask_bool)).astype(np.uint8)
+        else:
+            out_array = np.where(mask_bool, np.asarray(image_data), 0)
+            out_array = out_array.astype(image_data.dtype, copy=False)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fits.PrimaryHDU(data=out_array, header=header).writeto(out_path, overwrite=True)
+    finally:
+        image_hdul.close()
+        mask_hdul.close()
+
+
 def write_gray_png(path: Path, image) -> None:
     import struct
     import zlib
@@ -339,6 +607,163 @@ def scaled_log_image(image):
     vmax = max(float(np.percentile(np.log10(positive), 99.7)), vmin + 0.01)
     scaled = np.clip((logged - vmin) / (vmax - vmin), 0.0, 1.0)
     return np.flipud((255.0 * scaled).astype(np.uint8))
+
+
+def scaled_linear_image(image):
+    import numpy as np
+
+    finite = image[np.isfinite(image)]
+    if not finite.size:
+        return np.zeros_like(image, dtype=np.uint8)
+    vmin = float(np.percentile(finite, 1.0))
+    vmax = float(np.percentile(finite, 99.0))
+    if vmax <= vmin:
+        vmax = vmin + 1.0
+    scaled = np.clip((image - vmin) / (vmax - vmin), 0.0, 1.0)
+    return np.flipud((255.0 * scaled).astype(np.uint8))
+
+
+def fits_image(path: Path):
+    import numpy as np
+    from astropy.io import fits
+
+    with fits.open(path, memmap=True) as hdul:
+        data = None
+        for hdu in hdul:
+            if getattr(hdu, "data", None) is not None:
+                arr = np.asarray(hdu.data)
+                if arr.ndim >= 2 and arr.dtype.kind in {"i", "u", "f"}:
+                    data = np.squeeze(arr).astype(float)
+                    break
+        if data is None:
+            die(f"No image data found in {path}")
+        while data.ndim > 2:
+            data = data[0]
+        return np.nan_to_num(data, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def maps_qc(manifest_arg: str, outdir_arg: str) -> None:
+    import numpy as np
+
+    manifest = Path(manifest_arg)
+    if not manifest.is_file():
+        die(f"Maps manifest not found: {manifest}")
+    rows = []
+    lines = manifest.read_text(encoding="utf-8").splitlines()
+    if not lines:
+        die(f"Empty maps manifest: {manifest}")
+    header = lines[0].split("\t")
+    index = {name: idx for idx, name in enumerate(header)}
+    for line in lines[1:]:
+        parts = line.split("\t")
+        if len(parts) >= len(header):
+            rows.append(parts)
+    if not rows:
+        die(f"No map products listed in {manifest}")
+
+    products = [
+        ("counts", "sum", "log"),
+        ("exposure_vig", "sum", "log"),
+        ("exposure_unvig", "sum", "log"),
+    ]
+    outdir = Path(outdir_arg)
+    outdir.mkdir(parents=True, exist_ok=True)
+    summary = ["band\tproduct\tfiles\toperation\tpng"]
+
+    bands = []
+    for row in rows:
+        band = row[index["band"]]
+        if band not in bands:
+            bands.append(band)
+
+    for band in bands:
+        band_rows = [row for row in rows if row[index["band"]] == band]
+        for product, op, scale in products:
+            acc = None
+            used = 0
+            for row in band_rows:
+                path = Path(row[index[product]])
+                if not path.is_file():
+                    continue
+                image = fits_image(path)
+                if acc is None:
+                    acc = np.zeros_like(image, dtype=float)
+                if image.shape != acc.shape:
+                    die(f"Shape mismatch in {product} for band {band}: {path}")
+                if op == "max":
+                    acc = np.maximum(acc, image)
+                else:
+                    acc += image
+                used += 1
+            if acc is None:
+                continue
+            png = outdir / f"{band}_{product}_mosaic.png"
+            write_gray_png(png, scaled_linear_image(acc) if scale == "linear" else scaled_log_image(acc))
+            summary.append(f"{band}\t{product}\t{used}\t{op}\t{png}")
+
+    (outdir / "maps_qc_summary.tsv").write_text("\n".join(summary) + "\n", encoding="utf-8")
+
+
+def cheese_qc(manifest_arg: str, outdir_arg: str) -> None:
+    import numpy as np
+
+    manifest = Path(manifest_arg)
+    if not manifest.is_file():
+        die(f"Cheese manifest not found: {manifest}")
+    rows = []
+    lines = manifest.read_text(encoding="utf-8").splitlines()
+    if not lines:
+        die(f"Empty cheese manifest: {manifest}")
+    header = lines[0].split("\t")
+    index = {name: idx for idx, name in enumerate(header)}
+    for line in lines[1:]:
+        parts = line.split("\t")
+        if len(parts) >= len(header):
+            rows.append(parts)
+    if not rows:
+        die(f"No cheese products listed in {manifest}")
+
+    products = [
+        ("cheese_mask", "max", "linear"),
+        ("cheesed_counts", "sum", "log"),
+        ("cheesed_exposure_vig", "sum", "log"),
+    ]
+    outdir = Path(outdir_arg)
+    outdir.mkdir(parents=True, exist_ok=True)
+    summary = ["band\tproduct\tfiles\toperation\tpng"]
+
+    bands = []
+    for row in rows:
+        band = row[index["band"]]
+        if band not in bands:
+            bands.append(band)
+
+    for band in bands:
+        band_rows = [row for row in rows if row[index["band"]] == band]
+        for product, op, scale in products:
+            acc = None
+            used = 0
+            for row in band_rows:
+                path = Path(row[index[product]])
+                if not path.is_file():
+                    continue
+                image = fits_image(path)
+                if acc is None:
+                    acc = np.zeros_like(image, dtype=float)
+                if image.shape != acc.shape:
+                    die(f"Shape mismatch in {product} for band {band}: {path}")
+                if op == "max":
+                    acc = np.maximum(acc, image)
+                else:
+                    acc += image
+                used += 1
+            if acc is None:
+                continue
+            png = outdir / f"{band}_{product}_mosaic.png"
+            write_gray_png(png, scaled_linear_image(acc) if scale == "linear" else scaled_log_image(acc))
+            summary.append(f"{band}\t{product}\t{used}\t{op}\t{png}")
+
+    (outdir / "cheese_qc_summary.tsv").write_text("\n".join(summary) + "\n", encoding="utf-8")
 
 
 def event_mosaic(manifest_dir: str, outdir: str, detectors_arg: str = "PN", split_ev_arg: str = "1000") -> None:
@@ -399,15 +824,40 @@ def main(argv: list[str]) -> int:
         clean_band_table(*args)
     elif cmd == "clean-expr" and len(args) == 3:
         clean_expression(*args)
+    elif cmd == "maps-band-table" and len(args) == 1:
+        maps_band_table(*args)
+    elif cmd == "maps-clean-labels" and len(args) == 2:
+        maps_clean_labels(*args)
+    elif cmd == "maps-expr" and len(args) == 3:
+        maps_expression(*args)
+    elif cmd == "maps-grid" and len(args) == 4:
+        maps_grid(*args)
+    elif cmd == "maps-grid" and len(args) == 5:
+        maps_grid(args[0], args[1], args[2], args[3], args[4])
+    elif cmd == "maps-qc" and len(args) == 2:
+        maps_qc(*args)
+    elif cmd == "cheese-qc" and len(args) == 2:
+        cheese_qc(*args)
     elif cmd == "fits-rows" and len(args) == 1:
         fits_rows(*args)
+    elif cmd == "fits-table-hdu" and len(args) in {1, 2}:
+        fits_table_hdu(args[0], args[1] if len(args) == 2 else "SRCLIST")
+    elif cmd == "fits-table-has-column" and len(args) == 3:
+        fits_table_has_column(*args)
+    elif cmd == "apply-image-mask" and len(args) in {3, 4}:
+        apply_image_mask(args[0], args[1], args[2], args[3] if len(args) == 4 else "image")
     elif cmd == "event-mosaic" and len(args) in {2, 3, 4}:
         event_mosaic(args[0], args[1], args[2] if len(args) >= 3 else "PN", args[3] if len(args) == 4 else "1000")
     else:
         die(
             "Usage: tools.py shell CONFIG | rewrite-path SUM.SAS PATH | "
             "clean-band-labels CONFIG | clean-band-table CONFIG | clean-expr CONFIG DETECTOR LABEL | "
-            "fits-rows FITS | event-mosaic MANIFEST_DIR OUTDIR [DETECTORS] [SPLIT_EV]"
+            "maps-band-table CONFIG | maps-clean-labels CONFIG MAP_LABEL | maps-expr CONFIG DETECTOR LABEL | "
+            "maps-grid OUTDIR BIN_PHYS PAD_FRAC MANIFEST_DIR [DETECTORS] | "
+            "maps-qc MAPS_MANIFEST OUTDIR | cheese-qc CHEESE_MANIFEST OUTDIR | "
+            "fits-rows FITS | fits-table-hdu FITS [PREFERRED] | fits-table-has-column FITS TABLE COLUMN | "
+            "apply-image-mask IMAGE MASK OUT [image|mask] | "
+            "event-mosaic MANIFEST_DIR OUTDIR [DETECTORS] [SPLIT_EV]"
         )
     return 0
 
