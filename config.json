@@ -1,8 +1,8 @@
 {
-  "workdir": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Cambridge/X3I/reduction_v6/output",
+  "workdir": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Cambridge/X3I/reduction_v9/output",
   "odfdir": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/ODF",
 
-  "shortlink_name": "c2025n1_v6",
+  "shortlink_name": "c2025n1_v9",
   "keep_shortlink": true,
   "shortlink_max_path": 60,
 
@@ -126,8 +126,12 @@
   "map_bkg_excesssigma": 4,
   "map_bkg_snrmin": 30,
   "map_bkg_smoothsigma": 6,
-  "maps_background_fraction": 0.10,
+  "maps_background_fraction": 1.0,
+  "maps_background_use_exposure_term": false,
   "maps_background_outside_radius_fraction": 0.5,
+  "maps_split_bases": ["S003"],
+  "maps_split_threshold_amin": 1.0,
+  "maps_split_min_duration_s": 1000.0,
 
   "cheese_emin": 1000,
   "cheese_emax": 4000,

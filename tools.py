@@ -93,6 +93,15 @@ def shell(path: str) -> None:
         "SAS_VERBOSITY_CONFIG": cfg.get("sas_verbosity", ""),
         "DETECTORS": " ".join(normalize_detectors(cfg.get("detectors"))),
         "AHF_INPUT": cfg.get("ahf_input", ""),
+        "TARGET_ID": cfg.get("target_id", "C/2025 N1"),
+        "TARGET_ID_TYPE": cfg.get("target_id_type", "smallbody"),
+        "TRACK_INPUT": cfg.get("track_input", ""),
+        "TRACK_STEP": cfg.get("track_step", "30s"),
+        "COMET_REF_RA": cfg.get("comet_ref_ra", ""),
+        "COMET_REF_DEC": cfg.get("comet_ref_dec", ""),
+        "ATTMOVE_GRANULARITY": cfg.get("attmove_granularity", 5),
+        "ATTMOVE_MINSTABLE": cfg.get("attmove_minstable", 30),
+        "STACK_ATTCALC_IMAGE_SIZE_DEG": cfg.get("stack_attcalc_image_size_deg", 0.6),
         "QC_SOFT_HARD_SPLIT_EV": cfg.get("qc_soft_hard_split_ev", 1000),
         "CLEAN_GTI_ENABLED": yesno(cfg.get("clean_gti_enabled"), True),
         "CLEAN_GTI_RATE_CUT": cfg.get("clean_gti_rate_cut", 4.80001211),
@@ -122,9 +131,30 @@ def shell(path: str) -> None:
         "MAP_BKG_SNRMIN": cfg.get("map_bkg_snrmin", 30),
         "MAP_BKG_SMOOTHSIGMA": cfg.get("map_bkg_smoothsigma", 6),
         "MAPS_BACKGROUND_FRACTION": cfg.get("maps_background_fraction", 0.10),
+        "MAPS_BACKGROUND_USE_EXPOSURE_TERM": yesno(
+            cfg.get("maps_background_use_exposure_term"), False
+        ),
         "MAPS_BACKGROUND_OUTSIDE_RADIUS_FRACTION": cfg.get(
             "maps_background_outside_radius_fraction", 0.5
         ),
+        "FRAMES_SPLIT_BASES": ",".join(
+            str(b)
+            for b in cfg.get("frames_split_bases", cfg.get("maps_split_bases", []))
+            if str(b).strip()
+        ),
+        "FRAMES_SPLIT_MODE": cfg.get("frames_split_mode", "auto"),
+        "FRAMES_SPLIT_THRESHOLD_AMIN": cfg.get(
+            "frames_split_threshold_amin", cfg.get("maps_split_threshold_amin", 1.0)
+        ),
+        "FRAMES_SPLIT_MIN_DURATION_S": cfg.get(
+            "frames_split_min_duration_s",
+            cfg.get("maps_split_min_duration_s", 1000.0),
+        ),
+        "MAPS_SPLIT_BASES": ",".join(
+            str(b) for b in cfg.get("maps_split_bases", []) if str(b).strip()
+        ),
+        "MAPS_SPLIT_THRESHOLD_AMIN": cfg.get("maps_split_threshold_amin", 1.0),
+        "MAPS_SPLIT_MIN_DURATION_S": cfg.get("maps_split_min_duration_s", 1000.0),
         "CHEESE_EMIN": cfg.get("cheese_emin", 1000),
         "CHEESE_EMAX": cfg.get("cheese_emax", 4000),
         "CHEESE_MLMIN": cfg.get("cheese_mlmin", 10),
@@ -182,6 +212,7 @@ def manifest_events(manifest_arg: str, detectors_arg: str = "PN") -> list[Path]:
             for root in roots:
                 candidates = [
                     root / f"{detector}_raw.txt",
+                    root / f"{detector}_frames.txt",
                     root / f"{detector}_clean_files.txt",
                 ]
                 candidates.extend(sorted(root.glob(f"{detector}_*_clean_files.txt")))
@@ -604,6 +635,85 @@ def fits_table_has_column(path_arg: str, table_arg: str, column_arg: str) -> Non
         print("yes" if column in names else "no")
 
 
+def image_positive_pixels(image_arg: str) -> None:
+    import numpy as np
+
+    arr = fits_image(Path(image_arg))
+    print(int(((np.isfinite(arr)) & (arr > 0)).sum()))
+
+
+def zero_image_like(
+    template_arg: str,
+    out_arg: str,
+    dtype_arg: str = "float32",
+) -> None:
+    """Write an all-zero image with the same WCS/shape as TEMPLATE."""
+    import numpy as np
+    from astropy.io import fits
+
+    template = Path(template_arg)
+    out_path = Path(out_arg)
+    if not template.is_file():
+        die(f"Missing template image: {template}")
+
+    dtypes = {
+        "float32": np.float32,
+        "float64": np.float64,
+        "int32": np.int32,
+        "uint8": np.uint8,
+    }
+    dtype_key = str(dtype_arg).strip().lower() or "float32"
+    if dtype_key not in dtypes:
+        die(f"Unsupported zero-image dtype: {dtype_arg}")
+
+    with fits.open(template, memmap=False) as hdul:
+        src_hdu = None
+        for hdu in hdul:
+            data = getattr(hdu, "data", None)
+            if data is None:
+                continue
+            arr = np.asarray(data)
+            if arr.ndim >= 2 and arr.dtype.kind in {"i", "u", "f"}:
+                src_hdu = hdu
+                break
+        if src_hdu is None:
+            die(f"No image HDU in {template}")
+        data = np.array(np.squeeze(src_hdu.data), copy=False)
+        while data.ndim > 2:
+            data = data[0]
+        header = src_hdu.header.copy()
+
+    for key in ("XTENSION", "PCOUNT", "GCOUNT", "EXTNAME"):
+        if key in header:
+            del header[key]
+    out_data = np.zeros(data.shape, dtype=dtypes[dtype_key])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fits.PrimaryHDU(data=out_data, header=header).writeto(out_path, overwrite=True)
+    print(f"Wrote {out_path}")
+
+
+def empty_srclist(out_arg: str) -> None:
+    """Write an empty SRCLIST table suitable for source-detection fallbacks."""
+    import numpy as np
+    from astropy.io import fits
+
+    out_path = Path(out_arg)
+    cols = [
+        fits.Column(name="ID_INST", format="1J", array=np.array([], dtype=np.int32)),
+        fits.Column(name="ID_BAND", format="1J", array=np.array([], dtype=np.int32)),
+        fits.Column(name="X_IMA", format="1D", array=np.array([], dtype=np.float64)),
+        fits.Column(name="Y_IMA", format="1D", array=np.array([], dtype=np.float64)),
+        fits.Column(name="DET_ML", format="1D", array=np.array([], dtype=np.float64)),
+        fits.Column(name="FLUX", format="1D", array=np.array([], dtype=np.float64)),
+        fits.Column(name="BG_MAP", format="1D", array=np.array([], dtype=np.float64)),
+        fits.Column(name="EXP_MAP", format="1D", array=np.array([], dtype=np.float64)),
+    ]
+    table = fits.BinTableHDU.from_columns(cols, name="SRCLIST")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fits.HDUList([fits.PrimaryHDU(), table]).writeto(out_path, overwrite=True)
+    print(f"Wrote {out_path}")
+
+
 def combine_masks(detmask_arg: str, regmask_arg: str, out_arg: str) -> None:
     """Combine a detector validity mask and a region (source-exclusion) mask.
 
@@ -983,6 +1093,149 @@ def write_rgb_png(path: Path, image) -> None:
     path.write_bytes(png)
 
 
+def draw_border(
+    image,
+    x0: int,
+    x1: int,
+    y0: int,
+    y1: int,
+    color: int | tuple[int, int, int] = 255,
+) -> None:
+    import numpy as np
+
+    arr = np.asarray(image)
+    if arr.ndim not in {2, 3}:
+        die(f"draw_border expects a 2-D or 3-D image, got {arr.shape}")
+    x0 = max(0, min(arr.shape[1] - 1, int(x0)))
+    x1 = max(0, min(arr.shape[1] - 1, int(x1)))
+    y0 = max(0, min(arr.shape[0] - 1, int(y0)))
+    y1 = max(0, min(arr.shape[0] - 1, int(y1)))
+    if x0 > x1 or y0 > y1:
+        return
+    if arr.ndim == 2:
+        arr[y0, x0 : x1 + 1] = color
+        arr[y1, x0 : x1 + 1] = color
+        arr[y0 : y1 + 1, x0] = color
+        arr[y0 : y1 + 1, x1] = color
+    else:
+        rgb = np.asarray(color, dtype=arr.dtype)
+        arr[y0, x0 : x1 + 1, :] = rgb
+        arr[y1, x0 : x1 + 1, :] = rgb
+        arr[y0 : y1 + 1, x0, :] = rgb
+        arr[y0 : y1 + 1, x1, :] = rgb
+
+
+def _image_bbox(image) -> tuple[int, int, int, int] | None:
+    import numpy as np
+
+    arr = np.asarray(image)
+    yy, xx = np.nonzero(np.isfinite(arr) & (arr > 0))
+    if yy.size == 0:
+        return None
+    return int(xx.min()), int(xx.max()), int(yy.min()), int(yy.max())
+
+
+def _display_box_from_array(image) -> tuple[int, int, int, int] | None:
+    arr = image
+    box = _image_bbox(arr)
+    if box is None:
+        return None
+    x0, x1, y0, y1 = box
+    ny = arr.shape[0]
+    return x0, x1, ny - 1 - y1, ny - 1 - y0
+
+
+def _boxes_from_image_paths(
+    paths: list[Path],
+    *,
+    flip_for_display: bool = False,
+) -> list[tuple[int, int, int, int]]:
+    boxes: list[tuple[int, int, int, int]] = []
+    for path in paths:
+        if not path.is_file():
+            continue
+        image = fits_image(path)
+        box = _display_box_from_array(image) if flip_for_display else _image_bbox(image)
+        if box is not None:
+            boxes.append(box)
+    return boxes
+
+
+def _frame_block_mean_image(image, footprint, bins_y: int, bins_x: int):
+    import numpy as np
+
+    arr = np.asarray(image, dtype=float)
+    mask = np.asarray(footprint, dtype=bool) & np.isfinite(arr)
+    if arr.ndim != 2 or mask.shape != arr.shape:
+        die(
+            f"_frame_block_mean_image expects matching 2-D image/mask, got {arr.shape} and {mask.shape}"
+        )
+    out = np.full(arr.shape, np.nan, dtype=float)
+    if not mask.any():
+        return out
+
+    yy, xx = np.nonzero(mask)
+    y0 = int(yy.min())
+    y1 = int(yy.max()) + 1
+    x0 = int(xx.min())
+    x1 = int(xx.max()) + 1
+    ny = y1 - y0
+    nx = x1 - x0
+    by = max(1, min(int(bins_y), ny))
+    bx = max(1, min(int(bins_x), nx))
+    y_edges = y0 + (np.arange(by + 1) * ny) // by
+    x_edges = x0 + (np.arange(bx + 1) * nx) // bx
+
+    for iy in range(by):
+        ya = int(y_edges[iy])
+        yb = int(y_edges[iy + 1])
+        if yb <= ya:
+            continue
+        for ix in range(bx):
+            xa = int(x_edges[ix])
+            xb = int(x_edges[ix + 1])
+            if xb <= xa:
+                continue
+            block_mask = mask[ya:yb, xa:xb]
+            if not block_mask.any():
+                continue
+            block_vals = arr[ya:yb, xa:xb][block_mask]
+            if block_vals.size == 0:
+                continue
+            out_block = out[ya:yb, xa:xb]
+            out_block[block_mask] = float(block_vals.mean())
+            out[ya:yb, xa:xb] = out_block
+    return out
+
+
+def _event_box_from_xy(
+    x,
+    y,
+    extent: tuple[float, float, float, float],
+    nx: int,
+    ny: int,
+    *,
+    flip_for_display: bool = False,
+) -> tuple[int, int, int, int] | None:
+    import numpy as np
+
+    if x.size == 0 or y.size == 0:
+        return None
+    x0 = int(np.floor((float(np.min(x)) - extent[0]) * nx / (extent[1] - extent[0])))
+    x1 = int(np.floor((float(np.max(x)) - extent[0]) * nx / (extent[1] - extent[0])))
+    y0 = int(np.floor((float(np.min(y)) - extent[2]) * ny / (extent[3] - extent[2])))
+    y1 = int(np.floor((float(np.max(y)) - extent[2]) * ny / (extent[3] - extent[2])))
+    x0 = max(0, min(nx - 1, x0))
+    x1 = max(0, min(nx - 1, x1))
+    y0 = max(0, min(ny - 1, y0))
+    y1 = max(0, min(ny - 1, y1))
+    if x0 > x1 or y0 > y1:
+        return None
+    if flip_for_display:
+        return x0, x1, ny - 1 - y1, ny - 1 - y0
+    return x0, x1, y0, y1
+
+
 def scaled_log_image(image):
     import numpy as np
 
@@ -1051,12 +1304,16 @@ def _save_mosaic_png(
     image,
     scale: str,
     label: str,
+    boxes: list[tuple[int, int, int, int]] | None = None,
+    circles: list[tuple[float, float, float]] | None = None,
+    vmin_override: float | None = None,
+    vmax_override: float | None = None,
 ) -> None:
     """Render a 2-D image to PNG with a side colorbar (matplotlib).
 
-    scale is one of "log", "linear", "log_positive", or "linear_full".
-    "linear_full" uses 0..max with no percentile clipping (preserves
-    discrete step structure in flat per-frame mosaics).
+    scale is one of "log", "linear", "log_positive", "linear_full",
+    "linear_symmetric", "linear_percentile", or
+    "linear_diverging_percentile".
     """
     import numpy as np
     import matplotlib
@@ -1064,16 +1321,40 @@ def _save_mosaic_png(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     from matplotlib.colors import LogNorm, Normalize
+    from matplotlib.patches import Circle, Rectangle
     from matplotlib.ticker import LogLocator, MaxNLocator
 
     arr = np.asarray(image, dtype=float)
-    arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
-
-    nonzero = arr[(arr != 0) & np.isfinite(arr)]
+    finite = np.isfinite(arr)
+    finite_vals = arr[finite]
+    nonzero = finite_vals[finite_vals != 0]
     is_log = False
+    cmap = plt.get_cmap("gray").copy()
+    use_override = (
+        vmin_override is not None
+        and vmax_override is not None
+        and np.isfinite(vmin_override)
+        and np.isfinite(vmax_override)
+        and float(vmax_override) > float(vmin_override)
+    )
+
+    def percentile_limits(values, p_lo: float = 5.0, p_hi: float = 95.0) -> tuple[float, float]:
+        vals = np.asarray(values, dtype=float)
+        vals = vals[np.isfinite(vals)]
+        if vals.size == 0:
+            return 0.0, 1.0
+        vmin = float(np.percentile(vals, p_lo))
+        vmax = float(np.percentile(vals, p_hi))
+        if vmax <= vmin:
+            center = float(np.median(vals))
+            pad = max(1.0, abs(center) * 1.0e-3)
+            vmin = center - 0.5 * pad
+            vmax = center + 0.5 * pad
+        return vmin, vmax
+
     if scale in {"log", "log_positive"}:
         is_log = True
-        positive = arr[arr > 0]
+        positive = arr[finite & (arr > 0)]
         if positive.size:
             vmin = float(np.percentile(positive, 10.0))
             vmax = float(np.percentile(positive, 90.0))
@@ -1083,17 +1364,58 @@ def _save_mosaic_png(
             display = np.where(arr > 0, arr, np.nan)
         else:
             norm = Normalize(vmin=0.0, vmax=1.0)
-            display = arr
+            display = np.where(finite, arr, np.nan)
     elif scale == "linear_full":
         if nonzero.size:
-            vmin = float(np.percentile(nonzero, 10.0))
-            vmax = float(np.percentile(nonzero, 90.0))
+            vmin = 0.0
+            vmax = float(np.nanmax(finite_vals))
         else:
             vmin, vmax = 0.0, 1.0
         if vmax <= vmin:
             vmax = vmin + 1.0
         norm = Normalize(vmin=vmin, vmax=vmax, clip=True)
         display = arr
+    elif scale == "linear_symmetric":
+        if use_override:
+            vmin = float(vmin_override)
+            vmax = float(vmax_override)
+        elif finite_vals.size:
+            p5 = float(np.percentile(finite_vals, 5.0))
+            p95 = float(np.percentile(finite_vals, 95.0))
+            vmax = max(abs(p5), abs(p95))
+            vmin = -vmax
+        else:
+            vmin = -1.0
+            vmax = 1.0
+        if vmax <= 0:
+            vmin = -1.0
+            vmax = 1.0
+        norm = Normalize(vmin=vmin, vmax=vmax, clip=True)
+        display = arr
+        cmap = plt.get_cmap("vanimo").copy()
+    elif scale == "linear_percentile":
+        values = nonzero if nonzero.size else finite_vals
+        vmin, vmax = percentile_limits(values, 5.0, 95.0)
+        norm = Normalize(vmin=vmin, vmax=vmax, clip=True)
+        display = arr
+    elif scale == "linear_diverging_percentile":
+        if use_override:
+            vmin = float(vmin_override)
+            vmax = float(vmax_override)
+        elif finite_vals.size:
+            p5 = float(np.percentile(finite_vals, 5.0))
+            p95 = float(np.percentile(finite_vals, 95.0))
+            vmax = max(abs(p5), abs(p95))
+            vmin = -vmax
+        else:
+            vmin = -1.0
+            vmax = 1.0
+        if vmax <= 0:
+            vmin = -1.0
+            vmax = 1.0
+        norm = Normalize(vmin=vmin, vmax=vmax, clip=True)
+        display = arr
+        cmap = plt.get_cmap("vanimo").copy()
     else:
         if nonzero.size:
             vmin = float(np.percentile(nonzero, 10.0))
@@ -1111,11 +1433,38 @@ def _save_mosaic_png(
     fig_w = max(fig_h * aspect + 1.6, 4.0)
     fig, ax = plt.subplots(figsize=(fig_w, fig_h), facecolor="black")
     ax.set_facecolor("black")
-    cmap = plt.get_cmap("gray").copy()
     cmap.set_bad("black")
     im = ax.imshow(
         display, origin="lower", cmap=cmap, norm=norm, interpolation="nearest"
     )
+    for x0, x1, y0, y1 in boxes or []:
+        ax.add_patch(
+            Rectangle(
+                (x0 - 0.5, y0 - 0.5),
+                (x1 - x0 + 1),
+                (y1 - y0 + 1),
+                fill=False,
+                edgecolor="white",
+                linewidth=0.9,
+                alpha=0.9,
+                zorder=3,
+            )
+        )
+    for cx, cy, radius in circles or []:
+        if not np.isfinite([cx, cy, radius]).all() or radius <= 0:
+            continue
+        ax.add_patch(
+            Circle(
+                (cx, cy),
+                radius,
+                facecolor=(1.0, 0.82, 0.40, 0.0),
+                edgecolor="#ffd166",
+                linewidth=1.0,
+                hatch="////",
+                alpha=0.09,
+                zorder=4,
+            )
+        )
     ax.set_xticks([])
     ax.set_yticks([])
     for spine in ax.spines.values():
@@ -1145,12 +1494,332 @@ def _save_mosaic_png(
     plt.close(fig)
 
 
+def read_rate_table(path: Path):
+    import numpy as np
+    from astropy.io import fits
+
+    with fits.open(path, memmap=True) as hdul:
+        table = None
+        for hdu in hdul:
+            if (
+                isinstance(hdu, (fits.BinTableHDU, fits.TableHDU))
+                and hdu.data is not None
+            ):
+                table = hdu.data
+                break
+        if table is None or getattr(table, "names", None) is None:
+            die(f"No rate table found in {path}")
+        cols = {name.upper(): name for name in table.names}
+        if "TIME" not in cols or "RATE" not in cols:
+            die(f"Rate table in {path} is missing TIME/RATE columns")
+        time = np.asarray(table[cols["TIME"]], dtype=float)
+        rate = np.asarray(table[cols["RATE"]], dtype=float)
+    return time, rate
+
+
+def read_gti(path: Path):
+    import numpy as np
+    from astropy.io import fits
+
+    with fits.open(path, memmap=True) as hdul:
+        table = None
+        for hdu in hdul:
+            name = str(getattr(hdu, "name", "")).upper()
+            if name.startswith("STDGTI") or name.startswith("GTI"):
+                if getattr(hdu, "data", None) is not None:
+                    table = hdu.data
+                    break
+        if table is None:
+            for hdu in hdul:
+                if (
+                    isinstance(hdu, (fits.BinTableHDU, fits.TableHDU))
+                    and hdu.data is not None
+                ):
+                    table = hdu.data
+                    break
+        if table is None or getattr(table, "names", None) is None or len(table) == 0:
+            return np.zeros((0, 2), dtype=float)
+        cols = {name.upper(): name for name in table.names}
+        if "START" not in cols or "STOP" not in cols:
+            return np.zeros((0, 2), dtype=float)
+        return np.column_stack(
+            [
+                np.asarray(table[cols["START"]], dtype=float),
+                np.asarray(table[cols["STOP"]], dtype=float),
+            ]
+        )
+
+
+def in_gti(time, intervals) -> Any:
+    import numpy as np
+
+    keep = np.zeros(np.shape(time), dtype=bool)
+    for start, stop in intervals:
+        keep |= (time >= start) & (time <= stop)
+    return keep
+
+
+def flare_qc(
+    summary_arg: str,
+    outdir_arg: str,
+    max_panels_arg: str = "20",
+) -> None:
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        die(f"matplotlib is required for flare QC: {exc}")
+
+    import numpy as np
+
+    try:
+        max_panels = max(1, int(max_panels_arg))
+    except (TypeError, ValueError):
+        die(f"Invalid flare QC max_panels value: {max_panels_arg}")
+
+    summary_path = Path(summary_arg)
+    if not summary_path.is_file():
+        die(f"Flare summary not found: {summary_path}")
+
+    lines = summary_path.read_text(encoding="utf-8").splitlines()
+    if not lines:
+        die(f"Empty flare summary: {summary_path}")
+    header = lines[0].split("\t")
+    index = {name: idx for idx, name in enumerate(header)}
+    required = {
+        "inst",
+        "event",
+        "rate_cut_ct_s",
+        "timebin_s",
+        "pi_min",
+        "pi_max",
+        "lightcurve",
+        "gti",
+    }
+    missing = sorted(required - set(index))
+    if missing:
+        die(f"Flare summary {summary_path} is missing columns: {', '.join(missing)}")
+
+    outdir = Path(outdir_arg)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    entries: list[dict[str, Any]] = []
+    for line in lines[1:]:
+        parts = line.split("\t")
+        if len(parts) < len(header):
+            continue
+        lightcurve = Path(parts[index["lightcurve"]])
+        gti = Path(parts[index["gti"]])
+        if not lightcurve.is_file() or not gti.is_file():
+            continue
+        time, rate = read_rate_table(lightcurve)
+        finite = np.isfinite(time) & np.isfinite(rate)
+        if not finite.any():
+            continue
+        intervals = read_gti(gti)
+        keep = finite & in_gti(time, intervals)
+        cut = finite & ~keep
+        entries.append(
+            {
+                "inst": parts[index["inst"]],
+                "event": parts[index["event"]],
+                "rate_cut": float(parts[index["rate_cut_ct_s"]]),
+                "timebin": float(parts[index["timebin_s"]]),
+                "pi_min": parts[index["pi_min"]],
+                "pi_max": parts[index["pi_max"]],
+                "lightcurve": lightcurve,
+                "gti": gti,
+                "time": time,
+                "rate": rate,
+                "finite": finite,
+                "keep": keep,
+                "cut": cut,
+                "intervals": intervals,
+            }
+        )
+
+    if not entries:
+        return
+
+    entries.sort(key=lambda entry: (entry["inst"], entry["event"]))
+    page_rows = ["inst\tpage\tpanels\tpng"]
+    summary_rows = [
+        "inst\tevent\tlightcurve\tgti\tbins\taccepted_bins\trejected_bins\tkept_frac\tmedian_rate_ct_s\tp95_rate_ct_s\trate_cut_ct_s\ttimebin_s\tpi_min\tpi_max\tplot"
+    ]
+
+    detector_order: list[str] = []
+    for entry in entries:
+        inst = str(entry["inst"])
+        if inst not in detector_order:
+            detector_order.append(inst)
+
+    for inst in detector_order:
+        inst_entries = [entry for entry in entries if entry["inst"] == inst]
+        for page_idx, start in enumerate(
+            range(0, len(inst_entries), max_panels), start=1
+        ):
+            page = inst_entries[start : start + max_panels]
+            fig, axes = plt.subplots(
+                len(page),
+                1,
+                figsize=(10, max(2.6, 1.9 * len(page))),
+                squeeze=False,
+                constrained_layout=True,
+            )
+            fig.patch.set_facecolor("black")
+            ref = page[0]
+            fig.suptitle(
+                f"{inst} flare lightcurves\nPI {ref['pi_min']}-{ref['pi_max']} eV, "
+                f"{ref['timebin']:.0f} s bins, cut {ref['rate_cut']:.6g} ct/s",
+                color="white",
+                fontsize=10,
+            )
+
+            for row_idx, (ax, entry) in enumerate(zip(axes[:, 0], page)):
+                finite = entry["finite"]
+                time = entry["time"]
+                rate = entry["rate"]
+                keep = entry["keep"]
+                cut = entry["cut"]
+                t0 = float(np.nanmin(time[finite]))
+                x = (time - t0) / 1000.0
+
+                for start_t, stop_t in entry["intervals"]:
+                    ax.axvspan(
+                        (start_t - t0) / 1000.0,
+                        (stop_t - t0) / 1000.0,
+                        color="#00a6d6",
+                        alpha=0.08,
+                        linewidth=0.0,
+                    )
+                if np.any(keep):
+                    ax.scatter(
+                        x[keep],
+                        rate[keep],
+                        s=7,
+                        color="#00a6d6",
+                        label="kept" if row_idx == 0 else None,
+                    )
+                if np.any(cut):
+                    ax.scatter(
+                        x[cut],
+                        rate[cut],
+                        s=7,
+                        color="#d62728",
+                        label="cut" if row_idx == 0 else None,
+                    )
+                ax.axhline(
+                    entry["rate_cut"],
+                    color="white",
+                    linewidth=1.0,
+                    linestyle="--",
+                    alpha=0.9,
+                    label="threshold" if row_idx == 0 else None,
+                )
+                median_rate = float(np.nanmedian(rate[finite]))
+                ax.axhline(
+                    median_rate,
+                    color="#aaaaaa",
+                    linewidth=0.7,
+                    linestyle=":",
+                    alpha=0.8,
+                    label="median" if row_idx == 0 else None,
+                )
+
+                ax.set_facecolor("black")
+                for spine in ax.spines.values():
+                    spine.set_color("#666666")
+                ax.tick_params(colors="white", labelsize=8)
+                ax.grid(color="#333333", linewidth=0.5, alpha=0.35)
+                ax.set_ylabel("ct/s", color="white", fontsize=8)
+                ax.set_title(str(entry["event"]), color="white", fontsize=8, loc="left")
+
+                kept_frac = float(np.sum(keep)) / float(np.sum(finite))
+                ax.text(
+                    0.995,
+                    0.92,
+                    f"keep {int(np.sum(keep))}/{int(np.sum(finite))} ({100.0 * kept_frac:.0f}%)",
+                    transform=ax.transAxes,
+                    ha="right",
+                    va="top",
+                    color="white",
+                    fontsize=7,
+                    bbox={
+                        "facecolor": "black",
+                        "alpha": 0.55,
+                        "edgecolor": "none",
+                        "pad": 1.5,
+                    },
+                )
+                if not np.any(keep):
+                    ax.text(
+                        0.995,
+                        0.08,
+                        "all bins rejected",
+                        transform=ax.transAxes,
+                        ha="right",
+                        va="bottom",
+                        color="#ff8c8c",
+                        fontsize=7,
+                    )
+
+            axes[-1, 0].set_xlabel(
+                "ks from light-curve start", color="white", fontsize=8
+            )
+            handles, labels = axes[0, 0].get_legend_handles_labels()
+            if handles:
+                legend = axes[0, 0].legend(
+                    loc="upper right",
+                    fontsize=7,
+                    facecolor="black",
+                    edgecolor="#666666",
+                    framealpha=0.9,
+                )
+                for text in legend.get_texts():
+                    text.set_color("white")
+
+            png_name = (
+                f"clean_lightcurves_{inst}.png"
+                if len(inst_entries) <= max_panels
+                else f"clean_lightcurves_{inst}_p{page_idx:02d}.png"
+            )
+            png = outdir / png_name
+            fig.savefig(png, dpi=180, facecolor="black")
+            plt.close(fig)
+
+            page_rows.append(f"{inst}\t{page_idx}\t{len(page)}\t{png}")
+            for entry in page:
+                finite = entry["finite"]
+                keep = entry["keep"]
+                cut = entry["cut"]
+                summary_rows.append(
+                    f"{entry['inst']}\t{entry['event']}\t{entry['lightcurve']}\t{entry['gti']}\t"
+                    f"{int(np.sum(finite))}\t{int(np.sum(keep))}\t{int(np.sum(cut))}\t"
+                    f"{(float(np.sum(keep)) / float(np.sum(finite))):.6f}\t"
+                    f"{float(np.nanmedian(entry['rate'][finite])):.6g}\t"
+                    f"{float(np.nanpercentile(entry['rate'][finite], 95.0)):.6g}\t"
+                    f"{entry['rate_cut']:.6g}\t{entry['timebin']:.6g}\t"
+                    f"{entry['pi_min']}\t{entry['pi_max']}\t{png}"
+                )
+
+    (outdir / "clean_lightcurves.tsv").write_text(
+        "\n".join(summary_rows) + "\n", encoding="utf-8"
+    )
+    (outdir / "clean_lightcurve_pages.tsv").write_text(
+        "\n".join(page_rows) + "\n", encoding="utf-8"
+    )
+
+
 def maps_qc(
     manifest_arg: str,
     outdir_arg: str,
     background_manifest_arg: str | None = None,
 ) -> None:
     import numpy as np
+
+    corrected_frame_bins = 100
 
     manifest = Path(manifest_arg)
     if not manifest.is_file():
@@ -1168,8 +1837,11 @@ def maps_qc(
     if not rows:
         die(f"No map products listed in {manifest}")
 
-    # Optional flat-background lookup keyed by (inst, band, base) -> path.
-    bg_paths: dict[tuple[str, str, str], Path] = {}
+    # Optional flat-background lookup keyed by (inst, band, base) -> list[Path].
+    # Multiple paths per key are summed together so that per-pointing splits
+    # produce step-pattern background mosaics.
+    bg_paths: dict[tuple[str, str, str], list[Path]] = {}
+    bg_circles: dict[str, list[tuple[float, float, float]]] = {}
     if background_manifest_arg:
         bg_path = Path(background_manifest_arg)
         if bg_path.is_file():
@@ -1181,17 +1853,31 @@ def maps_qc(
                     parts = line.split("\t")
                     if len(parts) < len(bg_header):
                         continue
+                    band = parts[bg_idx["band"]]
                     key = (
                         parts[bg_idx["inst"]],
-                        parts[bg_idx["band"]],
+                        band,
                         parts[bg_idx["base"]],
                     )
-                    bg_paths[key] = Path(parts[bg_idx["background"]])
+                    bg_paths.setdefault(key, []).append(
+                        Path(parts[bg_idx["background"]])
+                    )
+                    if all(name in bg_idx for name in ("center_x", "center_y", "radius_pix")):
+                        try:
+                            circle = (
+                                float(parts[bg_idx["center_x"]]),
+                                float(parts[bg_idx["center_y"]]),
+                                float(parts[bg_idx["radius_pix"]]),
+                            )
+                        except (TypeError, ValueError):
+                            circle = None
+                        if circle is not None:
+                            bg_circles.setdefault(band, []).append(circle)
 
     products = [
-        ("counts", "sum", "log", "counts/pixel (summed)"),
-        ("exposure_vig", "sum", "log", "exposure_vig (s, summed)"),
-        ("exposure_unvig", "sum", "log", "exposure_unvig (s, summed)"),
+        ("counts", "sum", "linear_percentile", "counts/pixel (summed)"),
+        ("exposure_vig", "sum", "linear_percentile", "exposure_vig (s, summed)"),
+        ("exposure_unvig", "sum", "linear_percentile", "exposure_unvig (s, summed)"),
     ]
     outdir = Path(outdir_arg)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -1205,6 +1891,9 @@ def maps_qc(
 
     for band in bands:
         band_rows = [row for row in rows if row[index["band"]] == band]
+        band_boxes = _boxes_from_image_paths(
+            [Path(row[index["exposure_vig"]]) for row in band_rows]
+        )
         for product, op, scale, label in products:
             acc = None
             used = 0
@@ -1225,7 +1914,7 @@ def maps_qc(
             if acc is None:
                 continue
             png = outdir / f"{band}_{product}_mosaic.png"
-            _save_mosaic_png(png, acc, scale, f"{band} {label}")
+            _save_mosaic_png(png, acc, scale, f"{band} {label}", boxes=band_boxes)
             summary.append(f"{band}\t{product}\t{used}\t{op}\t{png}")
 
         # Exposure-corrected rate mosaic (counts / exposure_vig), no
@@ -1253,60 +1942,793 @@ def maps_qc(
                 rate = np.where(rate_exp > 0, rate_counts / rate_exp, 0.0)
             rate = np.nan_to_num(rate, nan=0.0, posinf=0.0, neginf=0.0)
             png = outdir / f"{band}_rate_mosaic.png"
-            _save_mosaic_png(png, rate, "log_positive", f"{band} C/E (counts/s/pixel)")
-            summary.append(f"{band}\trate\t{rate_used}\tC/E\t{png}")
+            _save_mosaic_png(
+                png,
+                rate,
+                "linear_percentile",
+                f"{band} C/E (counts/s/pixel)",
+                boxes=band_boxes,
+            )
+        summary.append(f"{band}\trate\t{rate_used}\tC/E\t{png}")
 
         # Background + corrected mosaics if a background manifest is provided.
         if not bg_paths:
             continue
+        band_circles = bg_circles.get(band, [])
+        if band_circles:
+            exclusion_acc = None
+            exclusion_used = 0
+            for row in band_rows:
+                exp_file = Path(row[index["exposure_vig"]])
+                if not exp_file.is_file():
+                    continue
+                exp_img = fits_image(exp_file)
+                footprint_img = np.where(exp_img > 0, 1.0, 0.0)
+                if exclusion_acc is None:
+                    exclusion_acc = np.zeros_like(footprint_img, dtype=float)
+                if footprint_img.shape != exclusion_acc.shape:
+                    die(f"Exposure shape mismatch for exclusion mosaic in band {band}: {exp_file}")
+                exclusion_acc += footprint_img
+                exclusion_used += 1
+            if exclusion_acc is not None:
+                png = outdir / f"{band}_exclusion_mosaic.png"
+                _save_mosaic_png(
+                    png,
+                    np.where(exclusion_acc > 0, exclusion_acc, np.nan),
+                    "linear_percentile",
+                    f"{band} exclusion geometry",
+                    boxes=band_boxes,
+                    circles=band_circles,
+                )
+                summary.append(f"{band}\texclusion\t{exclusion_used}\tfootprint\t{png}")
         counts_acc = None
         bg_acc = None
         exp_acc = None
+        corrected_binned_sum = None
+        corrected_binned_n = None
         used_bg = 0
         for row in band_rows:
             key = (row[index["inst"]], band, row[index["base"]])
-            bg_file = bg_paths.get(key)
+            bg_files = bg_paths.get(key, [])
             counts_file = Path(row[index["counts"]])
             exp_file = Path(row[index["exposure_vig"]])
-            if (
-                bg_file is None
-                or not bg_file.is_file()
-                or not counts_file.is_file()
-                or not exp_file.is_file()
-            ):
+            if not bg_files or not counts_file.is_file() or not exp_file.is_file():
+                continue
+            valid_bg = [p for p in bg_files if p.is_file()]
+            if not valid_bg:
                 continue
             counts_img = fits_image(counts_file)
-            bg_img = fits_image(bg_file)
             exp_img = fits_image(exp_file)
-            if counts_img.shape != bg_img.shape or counts_img.shape != exp_img.shape:
-                die(f"Shape mismatch in background/corrected for band {band}: {key}")
+            if counts_img.shape != exp_img.shape:
+                die(f"Counts/exposure shape mismatch for band {band}: {key}")
+            bg_sum = np.zeros_like(counts_img, dtype=float)
+            for bp in valid_bg:
+                bg_img = fits_image(bp)
+                if bg_img.shape != counts_img.shape:
+                    die(f"Background shape mismatch for band {band}: {bp}")
+                bg_sum += bg_img
             if counts_acc is None:
                 counts_acc = np.zeros_like(counts_img, dtype=float)
                 bg_acc = np.zeros_like(counts_img, dtype=float)
                 exp_acc = np.zeros_like(counts_img, dtype=float)
+                corrected_binned_sum = np.zeros_like(counts_img, dtype=float)
+                corrected_binned_n = np.zeros_like(counts_img, dtype=float)
             counts_acc += counts_img
-            bg_acc += bg_img
+            bg_acc += bg_sum
             exp_acc += exp_img
-            used_bg += 1
+            with np.errstate(divide="ignore", invalid="ignore"):
+                corrected_frame = np.where(
+                    exp_img > 0, (counts_img - bg_sum) / exp_img, np.nan
+                )
+            corrected_frame_binned = _frame_block_mean_image(
+                corrected_frame,
+                exp_img > 0,
+                corrected_frame_bins,
+                corrected_frame_bins,
+            )
+            finite_binned = np.isfinite(corrected_frame_binned)
+            if finite_binned.any():
+                corrected_binned_sum[finite_binned] += corrected_frame_binned[
+                    finite_binned
+                ]
+                corrected_binned_n[finite_binned] += 1.0
+            used_bg += len(valid_bg)
         if counts_acc is None:
             continue
         png = outdir / f"{band}_background_mosaic.png"
         _save_mosaic_png(
-            png, bg_acc, "linear", f"{band} background (counts/pixel, summed)"
+            png,
+            bg_acc,
+            "linear_percentile",
+            f"{band} background (counts/pixel, summed)",
+            boxes=band_boxes,
         )
         summary.append(f"{band}\tbackground\t{used_bg}\tsum\t{png}")
+        residual_counts = counts_acc - bg_acc
+        residual_counts_masked = np.where(exp_acc > 0, residual_counts, np.nan)
+        png = outdir / f"{band}_residual_counts_mosaic.png"
+        _save_mosaic_png(
+            png,
+            residual_counts_masked,
+            "linear_diverging_percentile",
+            f"{band} C-B (counts/pixel, summed)",
+            boxes=band_boxes,
+        )
+        summary.append(f"{band}\tresidual_counts\t{used_bg}\tC-B\t{png}")
         with np.errstate(divide="ignore", invalid="ignore"):
-            corrected = np.where(exp_acc > 0, (counts_acc - bg_acc) / exp_acc, 0.0)
+            corrected = np.where(exp_acc > 0, residual_counts / exp_acc, 0.0)
         corrected = np.nan_to_num(corrected, nan=0.0, posinf=0.0, neginf=0.0)
+        corrected_masked = np.where(exp_acc > 0, corrected, np.nan)
+        corrected_finite = corrected_masked[np.isfinite(corrected_masked)]
+        if corrected_finite.size:
+            corrected_p5 = float(np.percentile(corrected_finite, 5.0))
+            corrected_p95 = float(np.percentile(corrected_finite, 95.0))
+            corrected_vmax = max(abs(corrected_p5), abs(corrected_p95))
+        else:
+            corrected_vmax = 1.0
+        if corrected_vmax <= 0:
+            corrected_vmax = 1.0
         png = outdir / f"{band}_corrected_mosaic.png"
         _save_mosaic_png(
-            png, corrected, "log_positive", f"{band} (C-B)/E (counts/s/pixel)"
+            png,
+            corrected_masked,
+            "linear_diverging_percentile",
+            f"{band} (C-B)/E (counts/s/pixel)",
+            boxes=band_boxes,
+            vmin_override=-corrected_vmax,
+            vmax_override=corrected_vmax,
         )
         summary.append(f"{band}\tcorrected\t{used_bg}\t(C-B)/E\t{png}")
+        png = outdir / f"{band}_corrected_linear_mosaic.png"
+        _save_mosaic_png(
+            png,
+            corrected_masked,
+            "linear_diverging_percentile",
+            f"{band} (C-B)/E (counts/s/pixel)",
+            boxes=band_boxes,
+            vmin_override=-corrected_vmax,
+            vmax_override=corrected_vmax,
+        )
+        summary.append(f"{band}\tcorrected_linear\t{used_bg}\t(C-B)/E\t{png}")
+        with np.errstate(divide="ignore", invalid="ignore"):
+            corrected_binned = np.where(
+                corrected_binned_n > 0,
+                corrected_binned_sum / corrected_binned_n,
+                np.nan,
+            )
+        png = outdir / f"{band}_corrected_binned_mosaic.png"
+        _save_mosaic_png(
+            png,
+            corrected_binned,
+            "linear_diverging_percentile",
+            f"{band} (C-B)/E frame-binned ({corrected_frame_bins}x{corrected_frame_bins} per frame)",
+            boxes=band_boxes,
+            vmin_override=-corrected_vmax,
+            vmax_override=corrected_vmax,
+        )
+        summary.append(
+            f"{band}\tcorrected_binned\t{used_bg}\t(C-B)/E framebins{corrected_frame_bins}\t{png}"
+        )
 
     (outdir / "maps_qc_summary.tsv").write_text(
         "\n".join(summary) + "\n", encoding="utf-8"
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-attitude-pointing splitting (e.g. slewing/mosaic exposures like S003)
+# ---------------------------------------------------------------------------
+
+
+def _atthk_cluster_pointings(
+    atthk_path: Path,
+    t_start: float,
+    t_stop: float,
+    threshold_amin: float = 1.0,
+    min_duration_s: float = 1000.0,
+) -> list[dict]:
+    """Cluster atthk attitude samples into stable pointings.
+
+    Reads the ATTHK binary table from ``atthk_path``, restricts to samples
+    whose TIME falls within ``[t_start, t_stop]``, and walks the samples in
+    chronological order, opening a new cluster whenever the angular
+    separation from the running cluster centroid exceeds
+    ``threshold_amin`` arcminutes. Adjacent clusters whose centroids fall
+    within the threshold of each other are then merged. Clusters whose
+    duration is shorter than ``min_duration_s`` are dropped (these
+    correspond to short slewing transitions).
+    """
+    import numpy as np
+    from astropy.io import fits
+
+    with fits.open(atthk_path) as hdul:
+        data = hdul["ATTHK"].data
+        t = data["TIME"].astype(float)
+        ra = data["AHFRA"].astype(float)
+        dec = data["AHFDEC"].astype(float)
+    mask = (t >= t_start) & (t <= t_stop)
+    if not mask.any():
+        return []
+    t = t[mask]
+    ra = ra[mask]
+    dec = dec[mask]
+
+    clusters: list[dict] = []
+    cur: dict | None = None
+    for ti, ri, di in zip(t, ra, dec):
+        if cur is None:
+            cur = {
+                "tmin": float(ti),
+                "tmax": float(ti),
+                "ras": [float(ri)],
+                "decs": [float(di)],
+            }
+            continue
+        cra = float(np.mean(cur["ras"]))
+        cdec = float(np.mean(cur["decs"]))
+        sep_amin = float(
+            np.hypot(
+                (ri - cra) * np.cos(np.radians(cdec)),
+                di - cdec,
+            )
+            * 60.0
+        )
+        if sep_amin > threshold_amin:
+            clusters.append(cur)
+            cur = {
+                "tmin": float(ti),
+                "tmax": float(ti),
+                "ras": [float(ri)],
+                "decs": [float(di)],
+            }
+        else:
+            cur["tmax"] = float(ti)
+            cur["ras"].append(float(ri))
+            cur["decs"].append(float(di))
+    if cur is not None:
+        clusters.append(cur)
+
+    # Drop short slew transitions before merging.
+    stable = [c for c in clusters if (c["tmax"] - c["tmin"]) >= min_duration_s]
+    if not stable:
+        return []
+
+    used = [False] * len(stable)
+    pointings: list[dict] = []
+    for i, ci in enumerate(stable):
+        if used[i]:
+            continue
+        used[i] = True
+        group = [ci]
+        cra = float(np.mean(ci["ras"]))
+        cdec = float(np.mean(ci["decs"]))
+        for j, cj in enumerate(stable):
+            if used[j]:
+                continue
+            sep_amin = float(
+                np.hypot(
+                    (np.mean(cj["ras"]) - cra) * np.cos(np.radians(cdec)),
+                    np.mean(cj["decs"]) - cdec,
+                )
+                * 60.0
+            )
+            if sep_amin <= threshold_amin:
+                used[j] = True
+                group.append(cj)
+        all_ras = [r for c in group for r in c["ras"]]
+        all_decs = [d for c in group for d in c["decs"]]
+        segments = sorted([(c["tmin"], c["tmax"]) for c in group])
+        pointings.append(
+            {
+                "ra": float(np.mean(all_ras)),
+                "dec": float(np.mean(all_decs)),
+                "segments": segments,
+                "t_start": float(segments[0][0]),
+                "t_stop": float(segments[-1][1]),
+                "n_samples": int(len(all_ras)),
+                "duration": float(sum(b - a for a, b in segments)),
+            }
+        )
+    pointings.sort(key=lambda p: p["t_start"])
+    for k, p in enumerate(pointings):
+        p["id"] = f"P{k:02d}"
+    return pointings
+
+
+def _split_event_file_by_time(
+    src_event: Path,
+    out_event: Path,
+    t1: float,
+    t2: float,
+) -> int:
+    """Write a copy of ``src_event`` restricted to TIME in [t1, t2].
+
+    Filters the EVENTS table by TIME and intersects every GTI/STDGTI table
+    (any HDU whose name starts with ``STDGTI`` or ``GTI``) with the time
+    window. Header TSTART/TSTOP keys on EVENTS, EXPOSU* and the GTI tables
+    are clipped to ``[t1, t2]``. Returns the number of EVENTS rows kept.
+    """
+    import numpy as np
+    from astropy.io import fits
+
+    out_event.parent.mkdir(parents=True, exist_ok=True)
+    with fits.open(src_event) as hdul:
+        new_hdus: list[fits.hdu.base.ExtensionHDU | fits.PrimaryHDU] = []
+        kept_rows = 0
+        for hdu in hdul:
+            name = (hdu.name or "").upper()
+            if name == "EVENTS" and hdu.data is not None:
+                data = hdu.data
+                tcol = data["TIME"]
+                m = (tcol >= t1) & (tcol <= t2)
+                kept_rows = int(m.sum())
+                new_hdu = fits.BinTableHDU(
+                    data=data[m], header=hdu.header.copy(), name="EVENTS"
+                )
+                new_hdu.header["TSTART"] = float(t1)
+                new_hdu.header["TSTOP"] = float(t2)
+                new_hdus.append(new_hdu)
+            elif name.startswith("STDGTI") or name.startswith("GTI"):
+                if hdu.data is None or len(hdu.data) == 0:
+                    new_hdus.append(hdu.copy())
+                    continue
+                start_col = (
+                    "START"
+                    if "START" in hdu.data.columns.names
+                    else hdu.data.columns.names[0]
+                )
+                stop_col = (
+                    "STOP"
+                    if "STOP" in hdu.data.columns.names
+                    else hdu.data.columns.names[1]
+                )
+                starts = np.maximum(hdu.data[start_col].astype(float), t1)
+                stops = np.minimum(hdu.data[stop_col].astype(float), t2)
+                keep = stops > starts
+                if not keep.any():
+                    # Replace with a single empty interval so eexpmap sees zero exposure.
+                    new_data = np.zeros(0, dtype=hdu.data.dtype)
+                    new_hdu = fits.BinTableHDU(
+                        data=new_data, header=hdu.header.copy(), name=hdu.name
+                    )
+                else:
+                    sub = hdu.data[keep].copy()
+                    sub[start_col] = starts[keep]
+                    sub[stop_col] = stops[keep]
+                    new_hdu = fits.BinTableHDU(
+                        data=sub, header=hdu.header.copy(), name=hdu.name
+                    )
+                new_hdu.header["TSTART"] = float(t1)
+                new_hdu.header["TSTOP"] = float(t2)
+                new_hdus.append(new_hdu)
+            else:
+                # Pass-through extensions; clip TSTART/TSTOP if present.
+                new_hdu = hdu.copy()
+                if "TSTART" in new_hdu.header:
+                    try:
+                        new_hdu.header["TSTART"] = float(
+                            max(float(new_hdu.header["TSTART"]), t1)
+                        )
+                    except (TypeError, ValueError):
+                        pass
+                if "TSTOP" in new_hdu.header:
+                    try:
+                        new_hdu.header["TSTOP"] = float(
+                            min(float(new_hdu.header["TSTOP"]), t2)
+                        )
+                    except (TypeError, ValueError):
+                        pass
+                new_hdus.append(new_hdu)
+        out = fits.HDUList(new_hdus)
+        out.writeto(out_event, overwrite=True)
+    return kept_rows
+
+
+def _pointing_base_name(base: str, pid: str) -> str:
+    """Insert a pointing suffix into a standard event-list base name."""
+    suffix = "_ImagingEvts"
+    pid = str(pid).upper()
+    if base.endswith(suffix):
+        return f"{base[:-len(suffix)]}_{pid}{suffix}"
+    return f"{base}_{pid}"
+
+
+def frames_split_events(
+    manifest_arg: str,
+    atthk_arg: str,
+    detector_arg: str,
+    outdir_arg: str,
+    split_bases_arg: str = "",
+    split_mode_arg: str = "auto",
+    threshold_amin_arg: str = "1.0",
+    min_duration_s_arg: str = "1000.0",
+) -> None:
+    """Build a per-detector frame manifest from a repro raw manifest."""
+    from astropy.io import fits
+
+    manifest = Path(manifest_arg)
+    if not manifest.is_file():
+        die(f"Raw manifest not found: {manifest}")
+    atthk = Path(atthk_arg)
+    if not atthk.is_file():
+        die(f"Attitude file not found: {atthk}")
+
+    detector = str(detector_arg).strip().upper()
+    if not detector:
+        die("Detector is required for frames-split-events")
+
+    split_bases = [b.strip() for b in split_bases_arg.split(",") if b.strip()]
+    split_mode = str(split_mode_arg).strip().lower() or "auto"
+    if split_mode not in {"auto", "list", "off"}:
+        die(f"frames_split_mode must be one of auto, list, off; got {split_mode_arg!r}")
+    try:
+        threshold_amin = float(threshold_amin_arg)
+    except (TypeError, ValueError):
+        die(f"Invalid threshold_amin: {threshold_amin_arg}")
+    try:
+        min_duration_s = float(min_duration_s_arg)
+    except (TypeError, ValueError):
+        die(f"Invalid min_duration_s: {min_duration_s_arg}")
+
+    outdir = Path(outdir_arg)
+    outdir.mkdir(parents=True, exist_ok=True)
+    manifest_out = outdir / "manifest" / f"{detector}_frames.txt"
+    summary_out = outdir / "manifest" / f"{detector}_frames.tsv"
+
+    manifest_lines: list[str] = []
+    summary_lines = [
+        "inst\tsource_base\tbase\tpointing\tsplit\tevent\tn_rows\t"
+        "t_start\tt_stop\tduration_s\tra\tdec\tn_samples"
+    ]
+
+    for raw_line in manifest.read_text(encoding="utf-8").splitlines():
+        text = raw_line.strip()
+        if not text:
+            continue
+        event = Path(text)
+        if not event.is_file():
+            die(f"Missing raw event listed in {manifest}: {event}")
+
+        base = event.name.rsplit(".", 1)[0]
+        with fits.open(event, memmap=True) as hdul:
+            data = hdul["EVENTS"].data
+            n_rows = 0 if data is None else int(len(data))
+            if n_rows > 0:
+                evt_t = data["TIME"].astype(float)
+                t_start = float(evt_t.min())
+                t_stop = float(evt_t.max())
+            else:
+                t_start = 0.0
+                t_stop = 0.0
+
+        pointings = []
+        if n_rows > 0:
+            pointings = _atthk_cluster_pointings(
+                atthk, t_start, t_stop, threshold_amin, min_duration_s
+            )
+        n_pointings = len(pointings)
+        base_selected = any(token in base for token in split_bases)
+        if split_mode == "auto":
+            should_split = n_pointings > 1
+        elif split_mode == "list":
+            should_split = base_selected and n_pointings > 1
+        else:
+            should_split = False
+
+        if not should_split:
+            manifest_lines.append(str(event.resolve()))
+            if n_pointings == 1:
+                p = pointings[0]
+                ra = f"{p['ra']:.6f}"
+                dec = f"{p['dec']:.6f}"
+                n_samples = str(p["n_samples"])
+            else:
+                ra = ""
+                dec = ""
+                n_samples = ""
+            summary_lines.append(
+                f"{detector}\t{base}\t{base}\t\tno\t{event.resolve()}\t{n_rows}\t"
+                f"{t_start:.3f}\t{t_stop:.3f}\t{max(t_stop - t_start, 0.0):.3f}\t"
+                f"{ra}\t{dec}\t{n_samples}"
+            )
+            continue
+
+        ext = event.suffix if event.suffix else ".fits"
+        kept_any = False
+        for p in pointings:
+            pid = str(p["id"]).upper()
+            split_base = _pointing_base_name(base, pid)
+            split_event = outdir / "events" / detector / base / f"{split_base}{ext}"
+            split_rows = _split_event_file_by_time(
+                event, split_event, p["t_start"], p["t_stop"]
+            )
+            if split_rows <= 0:
+                summary_lines.append(
+                    f"{detector}\t{base}\t{split_base}\t{pid}\tzero\t{split_event.resolve()}\t0\t"
+                    f"{p['t_start']:.3f}\t{p['t_stop']:.3f}\t{p['duration']:.3f}\t"
+                    f"{p['ra']:.6f}\t{p['dec']:.6f}\t{p['n_samples']}"
+                )
+                continue
+            manifest_lines.append(str(split_event.resolve()))
+            summary_lines.append(
+                f"{detector}\t{base}\t{split_base}\t{pid}\tyes\t{split_event.resolve()}\t{split_rows}\t"
+                f"{p['t_start']:.3f}\t{p['t_stop']:.3f}\t{p['duration']:.3f}\t"
+                f"{p['ra']:.6f}\t{p['dec']:.6f}\t{p['n_samples']}"
+            )
+            kept_any = True
+
+        if not kept_any:
+            manifest_lines.append(str(event.resolve()))
+            summary_lines.append(
+                f"{detector}\t{base}\t{base}\t\tfallback\t{event.resolve()}\t{n_rows}\t"
+                f"{t_start:.3f}\t{t_stop:.3f}\t{max(t_stop - t_start, 0.0):.3f}\t\t\t"
+            )
+
+    manifest_out.parent.mkdir(parents=True, exist_ok=True)
+    manifest_out.write_text("\n".join(manifest_lines) + "\n", encoding="utf-8")
+    summary_out.write_text("\n".join(summary_lines) + "\n", encoding="utf-8")
+    print(f"Wrote {manifest_out}")
+    print(f"Wrote {summary_out}")
+
+
+def _grid_from_env(grid_env: Path) -> dict:
+    """Parse a maps-grid env file produced by ``maps-grid``."""
+    out: dict[str, str] = {}
+    for line in grid_env.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        out[k.strip()] = v.strip()
+    return {
+        "bin": float(out["MAP_GRID_BIN_PHYS"]),
+        "x_min": float(out["MAP_GRID_X_MIN"]),
+        "x_max": float(out["MAP_GRID_X_MAX"]),
+        "y_min": float(out["MAP_GRID_Y_MIN"]),
+        "y_max": float(out["MAP_GRID_Y_MAX"]),
+        "nx": int(out["MAP_GRID_NX"]),
+        "ny": int(out["MAP_GRID_NY"]),
+    }
+
+
+def _histogram_events_to_grid(
+    event_path: Path,
+    grid: dict,
+    template_counts: Path,
+    out_path: Path,
+) -> int:
+    """Histogram the X,Y columns of ``event_path`` onto the maps grid.
+
+    Uses the same binning as ``stage_maps`` (matching the ``evselect``
+    invocation that produced the per-base counts image). Header is
+    inherited from ``template_counts`` so WCS aligns.
+    """
+    import numpy as np
+    from astropy.io import fits
+
+    with fits.open(event_path) as hdul:
+        data = hdul["EVENTS"].data
+        if data is None or len(data) == 0:
+            x = np.array([], dtype=float)
+            y = np.array([], dtype=float)
+        else:
+            x = data["X"].astype(float)
+            y = data["Y"].astype(float)
+    x_edges = np.arange(grid["x_min"], grid["x_max"] + grid["bin"], grid["bin"])
+    y_edges = np.arange(grid["y_min"], grid["y_max"] + grid["bin"], grid["bin"])
+    hist, _, _ = np.histogram2d(y, x, bins=[y_edges, x_edges])
+    img = hist.astype(np.int32)
+    # Match the evselect output dimensions.
+    if img.shape != (grid["ny"], grid["nx"]):
+        # Pad/crop to expected shape.
+        ny, nx = grid["ny"], grid["nx"]
+        out = np.zeros((ny, nx), dtype=np.int32)
+        h, w = img.shape
+        out[: min(ny, h), : min(nx, w)] = img[: min(ny, h), : min(nx, w)]
+        img = out
+
+    with fits.open(template_counts) as hdul:
+        header = hdul[0].header.copy()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fits.PrimaryHDU(data=img, header=header).writeto(out_path, overwrite=True)
+    return int(img.sum())
+
+
+def maps_split_pointings(
+    manifest_arg: str,
+    atthk_arg: str,
+    band_table_arg: str,
+    grid_env_arg: str,
+    split_bases_arg: str,
+    outdir_arg: str,
+    attrebin_arg: str,
+    threshold_amin_arg: str = "1.0",
+    min_duration_s_arg: str = "1000.0",
+) -> None:
+    """Expand the maps manifest by splitting selected bases by attitude pointings.
+
+    Reads ``maps_manifest.tsv`` and writes ``maps_pointings_manifest.tsv``
+    with an extra ``pointing`` column. For bases listed in
+    ``split_bases_arg`` (comma-separated, matched as substrings — e.g.
+    ``S003`` matches ``..._S003_ImagingEvts``), each row is replaced by
+    one row per stable attitude cluster found in ``atthk``. For each
+    pointing this generates a time-filtered map_event, a per-pointing
+    counts image (histogrammed onto the maps grid), and per-pointing
+    vignetted/unvignetted exposure maps via SAS ``eexpmap``.
+    """
+    import shutil
+    import subprocess
+
+    from astropy.io import fits
+
+    manifest = Path(manifest_arg)
+    if not manifest.is_file():
+        die(f"Maps manifest not found: {manifest}")
+    atthk = Path(atthk_arg)
+    if not atthk.is_file():
+        die(f"Attitude file not found: {atthk}")
+    band_table = Path(band_table_arg)
+    if not band_table.is_file():
+        die(f"Band table not found: {band_table}")
+    grid_env = Path(grid_env_arg)
+    if not grid_env.is_file():
+        die(f"Grid env not found: {grid_env}")
+    grid = _grid_from_env(grid_env)
+    outdir = Path(outdir_arg)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        threshold_amin = float(threshold_amin_arg)
+    except (TypeError, ValueError):
+        die(f"Invalid threshold_amin: {threshold_amin_arg}")
+    try:
+        min_duration_s = float(min_duration_s_arg)
+    except (TypeError, ValueError):
+        die(f"Invalid min_duration_s: {min_duration_s_arg}")
+
+    split_bases = [b.strip() for b in split_bases_arg.split(",") if b.strip()]
+
+    # Map band label -> (pimin, pimax)
+    band_pi: dict[str, tuple[str, str]] = {}
+    bt_lines = band_table.read_text(encoding="utf-8").splitlines()
+    for line in bt_lines:
+        if not line.strip() or line.startswith("label"):
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 4:
+            band_pi[parts[0]] = (parts[2], parts[3])
+
+    lines = manifest.read_text(encoding="utf-8").splitlines()
+    if not lines:
+        die(f"Empty maps manifest: {manifest}")
+    header = lines[0].split("\t")
+    idx = {n: i for i, n in enumerate(header)}
+    for required in (
+        "inst",
+        "band",
+        "base",
+        "event",
+        "counts",
+        "exposure_vig",
+        "exposure_unvig",
+    ):
+        if required not in idx:
+            die(f"Maps manifest missing column '{required}': {manifest}")
+
+    out_manifest = outdir / "maps_pointings_manifest.tsv"
+    out_lines = [
+        "inst\tband\tbase\tpointing\tevent\tcounts\texposure_vig\texposure_unvig"
+    ]
+    pointings_log = outdir / "maps_pointings.tsv"
+    log_lines = ["base\tpointing\tt_start\tt_stop\tduration\tra\tdec\tn_samples"]
+
+    eexpmap = shutil.which("eexpmap")
+    if eexpmap is None:
+        die("SAS task 'eexpmap' not found in PATH (run sas setup first)")
+
+    n_split = 0
+    n_pass = 0
+    for line in lines[1:]:
+        parts = line.split("\t")
+        if len(parts) < len(header):
+            continue
+        inst = parts[idx["inst"]]
+        band = parts[idx["band"]]
+        base = parts[idx["base"]]
+        event = Path(parts[idx["event"]])
+        counts = Path(parts[idx["counts"]])
+        exp_vig = Path(parts[idx["exposure_vig"]])
+        exp_unvig = Path(parts[idx["exposure_unvig"]])
+
+        if not any(s in base for s in split_bases):
+            out_lines.append(
+                f"{inst}\t{band}\t{base}\t\t{event}\t{counts}\t{exp_vig}\t{exp_unvig}"
+            )
+            n_pass += 1
+            continue
+
+        if band not in band_pi:
+            die(f"Band {band!r} missing from band table {band_table}")
+        pimin, pimax = band_pi[band]
+
+        # Determine the event file's time range for atthk clustering.
+        with fits.open(event) as hdul:
+            evt_t = hdul["EVENTS"].data["TIME"].astype(float)
+            t_start = float(evt_t.min())
+            t_stop = float(evt_t.max())
+
+        pointings = _atthk_cluster_pointings(
+            atthk, t_start, t_stop, threshold_amin, min_duration_s
+        )
+        if len(pointings) <= 1:
+            print(
+                f"[split] WARN: fewer than two stable pointings found for {inst} {band} {base}; "
+                f"keeping single row.",
+                file=sys.stderr,
+            )
+            out_lines.append(
+                f"{inst}\t{band}\t{base}\t\t{event}\t{counts}\t{exp_vig}\t{exp_unvig}"
+            )
+            n_pass += 1
+            continue
+
+        print(
+            f"[split] {inst} {band} {base}: {len(pointings)} pointings",
+            flush=True,
+        )
+
+        for p in pointings:
+            pid = p["id"]
+            ptdir = outdir / band / inst / base / pid
+            ptdir.mkdir(parents=True, exist_ok=True)
+            evt_out = ptdir / f"{base}_{band}_{pid}_map_events.fits"
+            counts_out = ptdir / f"{base}_{band}_{pid}_counts.fits"
+            exp_vig_out = ptdir / f"{base}_{band}_{pid}_exp_vig.fits"
+            exp_unvig_out = ptdir / f"{base}_{band}_{pid}_exp_unvig.fits"
+
+            n_evt = _split_event_file_by_time(event, evt_out, p["t_start"], p["t_stop"])
+            n_cnt = _histogram_events_to_grid(evt_out, grid, counts, counts_out)
+
+            # Run eexpmap (vignetted) — same params as stage_maps in pipeline.sh.
+            for expout, withvig in ((exp_vig_out, "yes"), (exp_unvig_out, "no")):
+                cmd = [
+                    eexpmap,
+                    f"imageset={counts_out}",
+                    f"attitudeset={atthk}",
+                    f"eventset={evt_out}",
+                    f"expimageset={expout}",
+                    f"pimin={pimin}",
+                    f"pimax={pimax}",
+                    f"withvignetting={withvig}",
+                    f"attrebin={attrebin_arg}",
+                ]
+                log_path = ptdir / f"{base}_{band}_{pid}_eexpmap_{withvig}.log"
+                with open(log_path, "w", encoding="utf-8") as lf:
+                    proc = subprocess.run(cmd, stdout=lf, stderr=subprocess.STDOUT)
+                if proc.returncode != 0:
+                    die(
+                        f"eexpmap failed for {base} {band} {pid} ({withvig}); "
+                        f"see {log_path}"
+                    )
+
+            out_lines.append(
+                f"{inst}\t{band}\t{base}\t{pid}\t{evt_out.resolve()}\t"
+                f"{counts_out.resolve()}\t{exp_vig_out.resolve()}\t{exp_unvig_out.resolve()}"
+            )
+            log_lines.append(
+                f"{base}\t{pid}\t{p['t_start']:.3f}\t{p['t_stop']:.3f}\t"
+                f"{p['duration']:.1f}\t{p['ra']:.6f}\t{p['dec']:.6f}\t{p['n_samples']}"
+            )
+            n_split += 1
+            print(
+                f"  {pid}: events={n_evt} counts_sum={n_cnt} ra={p['ra']:.4f} dec={p['dec']:.4f}",
+                flush=True,
+            )
+
+    out_manifest.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+    pointings_log.write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+    print(f"Wrote {out_manifest} ({n_split} pointings, {n_pass} pass-through rows)")
+    print(f"Wrote {pointings_log}")
 
 
 def maps_background(
@@ -1314,34 +2736,34 @@ def maps_background(
     outdir_arg: str,
     fraction_arg: str,
     outside_radius_fraction_arg: str,
+    use_exposure_term_arg: str = "no",
 ) -> None:
-    """Write flat constant-valued background maps for each maps manifest row.
+    """Write simple background maps for each maps manifest row.
 
-    For each per-pointing image on the common maps grid, the constant is
+    For each per-pointing image on the common maps grid, the background is
+    fit on the off-source sample pixels with either:
 
-        fraction * mean(counts[footprint & outside_circle])
+        counts ~= a + b * exposure_vig   (when use_exposure_term is true)
 
-    where:
+    or:
 
-    - ``footprint`` is the per-pointing exposure footprint (``exposure_vig
-      > 0``). All non-footprint pixels are excluded from the mean and are
-      written as zero in the output map.
-    - ``outside_circle`` is the complement of a per-pointing source
-      exclusion disk centred on the **pointing's footprint centroid**
-      (i.e. the chip centre on the maps grid for this exposure, which is
-      where the source sits for a tracked observation). Its radius is
-      ``outside_radius_fraction * R_foot`` where ``R_foot`` is half the
-      larger of the footprint's bounding-box dimensions for this
-      pointing — so radius is measured relative to the chip FOV, not the
-      common grid.
+        counts ~= a                      (when use_exposure_term is false)
 
-    The earlier implementation centred the exclusion circle at the
-    *grid* centre with radius set by the *grid* half-dimension. For
-    multi-pointing mosaics the per-pointing footprints lie hundreds of
-    pixels off-grid-centre, which (a) caused the "background" sample to
-    include the source for off-centre pointings and (b) chose a circle
-    larger than a single pointing's FOV so the centred case produced an
-    empty sample.
+    and the final background image is
+
+        fraction * max(a + b * exposure_vig, 0)
+
+    written only inside the per-pointing exposure footprint.
+
+    The sampling geometry is unchanged from the earlier flat-background
+    implementation: we use the per-pointing exposure footprint and exclude a
+    central disk centred on that footprint's centroid, with radius
+    ``outside_radius_fraction * R_foot`` where ``R_foot`` is half the
+    larger of the footprint's bounding-box dimensions.
+
+    ``fraction`` is retained as a post-fit scale factor so the existing
+    ``--bg-fraction`` / config workflow still works. The recommended default
+    is 1.0.
     """
     import numpy as np
     from astropy.io import fits
@@ -1358,6 +2780,16 @@ def maps_background(
         die(f"Invalid outside-radius fraction: {outside_radius_fraction_arg}")
     if not (0.0 <= outside_radius_fraction):
         die(f"Outside-radius fraction must be >= 0, got {outside_radius_fraction}")
+    use_exposure_term_text = str(use_exposure_term_arg).strip().lower()
+    if use_exposure_term_text in {"1", "y", "yes", "true"}:
+        use_exposure_term = True
+    elif use_exposure_term_text in {"0", "n", "no", "false"}:
+        use_exposure_term = False
+    else:
+        die(
+            "Invalid use_exposure_term value: "
+            f"{use_exposure_term_arg} (expected yes/no)"
+        )
 
     manifest = Path(manifest_arg)
     if not manifest.is_file():
@@ -1374,9 +2806,11 @@ def maps_background(
     outdir = Path(outdir_arg)
     outdir.mkdir(parents=True, exist_ok=True)
     out_manifest = outdir / "maps_background_manifest.tsv"
+    has_pointing = "pointing" in index
     out_lines = [
-        "inst\tband\tbase\tbackground\tfraction\toutside_radius_fraction"
-        "\tmean_counts\tconstant\tcenter_x\tcenter_y\tradius_pix\tn_sample"
+        "inst\tband\tbase\tpointing\tbackground\tfraction\toutside_radius_fraction\tuse_exposure_term"
+        "\tsample_mean_counts\tsample_mean_exp\tfit_a\tfit_b\tused_a\tused_b"
+        "\tmodel_mean_counts\trmse\tclipped_neg\tcenter_x\tcenter_y\tradius_pix\tn_sample\tfit_mode"
     ]
 
     for line in lines[1:]:
@@ -1386,6 +2820,7 @@ def maps_background(
         inst = parts[index["inst"]]
         band = parts[index["band"]]
         base = parts[index["base"]]
+        pointing = parts[index["pointing"]] if has_pointing else ""
         counts_path = Path(parts[index["counts"]])
         exp_path = Path(parts[index["exposure_vig"]])
         if not counts_path.is_file():
@@ -1397,7 +2832,7 @@ def maps_background(
         exp_img = fits_image(exp_path)
         if exp_img.shape != counts_img.shape:
             die(f"Counts/exposure shape mismatch for {base}: {counts_path}")
-        footprint = exp_img > 0
+        footprint = np.isfinite(exp_img) & (exp_img > 0)
 
         # Per-pointing exclusion circle. Centre and radius are measured
         # from this pointing's exposure footprint — NOT the common grid.
@@ -1410,28 +2845,109 @@ def maps_background(
             radius = outside_radius_fraction * half_extent
             yy, xx = np.ogrid[:ny, :nx]
             outside_circle = (yy - cy) ** 2 + (xx - cx) ** 2 >= radius * radius
-            sample = footprint & outside_circle
+            sample = footprint & outside_circle & np.isfinite(counts_img)
             n_sample = int(sample.sum())
-            if n_sample > 0:
-                mean_counts = float(counts_img[sample].mean())
-            else:
+            if n_sample <= 0:
                 # Circle swallowed the entire footprint; fall back to
                 # the full footprint (rare, only if outside_radius_fraction
                 # is set to 0 or a value > sqrt(2)).
-                mean_counts = float(counts_img[footprint].mean())
-                n_sample = int(footprint.sum())
+                sample = footprint & np.isfinite(counts_img)
+                n_sample = int(sample.sum())
         else:
             cy = (ny - 1) / 2.0
             cx = (nx - 1) / 2.0
             radius = 0.0
-            mean_counts = 0.0
             n_sample = 0
+            sample = np.zeros_like(footprint, dtype=bool)
 
-        constant = fraction * mean_counts
-        # Build a per-frame map: constant inside the exposure footprint,
-        # zero outside (matches the FOV of every other map product).
+        fit_mode = "affine"
+        sample_mean_counts = 0.0
+        sample_mean_exp = 0.0
+        fit_a = 0.0
+        fit_b = 0.0
+        rmse = 0.0
+        model_mean_counts = 0.0
+        clipped_neg = 0
+        if n_sample > 0:
+            sample_counts = counts_img[sample].astype(float)
+            sample_exp = exp_img[sample].astype(float)
+            sample_mean_counts = float(sample_counts.mean())
+            sample_mean_exp = float(sample_exp.mean())
+            if not use_exposure_term:
+                fit_mode = "constant_only"
+                fit_a = max(sample_mean_counts, 0.0)
+                fit_b = 0.0
+            else:
+                exp_span = (
+                    float(sample_exp.max() - sample_exp.min()) if sample_exp.size else 0.0
+                )
+                exp_scale = max(1.0, abs(sample_mean_exp))
+                if n_sample < 2 or exp_span <= (1.0e-8 * exp_scale):
+                    fit_mode = "slope_zero_lowvarexp"
+                    fit_a = max(sample_mean_counts, 0.0)
+                    fit_b = 0.0
+                else:
+                    def candidate_score(a: float, b: float) -> tuple[float, float]:
+                        model = a + b * sample_exp
+                        resid = sample_counts - model
+                        sse = float(np.dot(resid, resid))
+                        cand_rmse = float(np.sqrt(np.mean(resid * resid)))
+                        return sse, cand_rmse
+
+                    candidates: list[tuple[str, float, float, float, float]] = []
+                    design = np.column_stack(
+                        [np.ones(sample_counts.size, dtype=float), sample_exp]
+                    )
+                    coeffs, _residuals, _rank, _sing = np.linalg.lstsq(
+                        design, sample_counts, rcond=None
+                    )
+                    a_u = float(coeffs[0])
+                    b_u = float(coeffs[1])
+                    if (
+                        np.isfinite(a_u)
+                        and np.isfinite(b_u)
+                        and a_u >= 0.0
+                        and b_u >= 0.0
+                    ):
+                        sse, cand_rmse = candidate_score(a_u, b_u)
+                        candidates.append(
+                            ("affine_nonneg", a_u, b_u, sse, cand_rmse)
+                        )
+
+                    denom_b = float(np.dot(sample_exp, sample_exp))
+                    b_only = (
+                        max(float(np.dot(sample_exp, sample_counts)) / denom_b, 0.0)
+                        if denom_b > 0
+                        else 0.0
+                    )
+                    sse, cand_rmse = candidate_score(0.0, b_only)
+                    candidates.append(("intercept_zero", 0.0, b_only, sse, cand_rmse))
+
+                    a_only = max(sample_mean_counts, 0.0)
+                    sse, cand_rmse = candidate_score(a_only, 0.0)
+                    candidates.append(("slope_zero", a_only, 0.0, sse, cand_rmse))
+
+                    sse, cand_rmse = candidate_score(0.0, 0.0)
+                    candidates.append(("zero", 0.0, 0.0, sse, cand_rmse))
+
+                    fit_mode, fit_a, fit_b, _best_sse, rmse = min(
+                        candidates,
+                        key=lambda item: item[3],
+                    )
+        else:
+            fit_mode = "empty"
+
+        used_a = fraction * fit_a
+        used_b = fraction * fit_b
+        model_inside = used_a + used_b * exp_img
+        if footprint.any():
+            clipped_neg = int(np.sum(model_inside[footprint] < 0))
+            model_mean_counts = float(np.mean(np.maximum(model_inside[sample], 0.0))) if n_sample > 0 else 0.0
+
+        # Build a per-frame map from the affine fit inside the exposure
+        # footprint, clipped to non-negative values and zero outside.
         bg_image = np.zeros_like(counts_img, dtype=np.float32)
-        bg_image[footprint] = constant
+        bg_image[footprint] = np.maximum(model_inside[footprint], 0.0).astype(np.float32)
 
         # Preserve the WCS/header from the counts image so the background
         # aligns with downstream products.
@@ -1453,30 +2969,51 @@ def maps_background(
 
         bg_dir = outdir / "background" / inst / base
         bg_dir.mkdir(parents=True, exist_ok=True)
-        bg_path = bg_dir / f"{base}_{band}_background_flat.fits"
+        if pointing:
+            bg_path = bg_dir / f"{base}_{band}_{pointing}_background_affine.fits"
+        else:
+            bg_path = bg_dir / f"{base}_{band}_background_affine.fits"
         hdu = fits.PrimaryHDU(data=bg_image, header=new_header)
-        hdu.header["BG_FRAC"] = (fraction, "maps_background fraction of mean counts")
+        hdu.header["BGMODEL"] = ("A+BE", "background model")
+        hdu.header["BGSCALE"] = (fraction, "overall scale on fitted background model")
+        hdu.header["BGEXPTRM"] = (
+            "T" if use_exposure_term else "F",
+            "use exposure term b*E in background fit",
+        )
         hdu.header["BG_RFRAC"] = (
             outside_radius_fraction,
             "exclusion radius / per-pointing half-extent",
         )
+        hdu.header["BGAFIT"] = (fit_a, "fit intercept a in counts/pixel")
+        hdu.header["BGBFIT"] = (fit_b, "fit slope b vs exposure_vig")
+        hdu.header["BGA"] = (used_a, "scaled intercept a in counts/pixel")
+        hdu.header["BGB"] = (used_b, "scaled slope b vs exposure_vig")
         hdu.header["BG_CX"] = (cx, "exclusion circle centre, pixel x")
         hdu.header["BG_CY"] = (cy, "exclusion circle centre, pixel y")
         hdu.header["BG_RAD"] = (radius, "exclusion circle radius, pixels")
         hdu.header["BG_NSAMP"] = (n_sample, "n pixels in background sample")
-        hdu.header["BG_MEAN"] = (
-            mean_counts,
+        hdu.header["BGMEAN"] = (
+            sample_mean_counts,
             "mean counts/pixel in background sample",
         )
-        hdu.header["BG_CONST"] = (constant, "flat background value (counts/pixel)")
+        hdu.header["BGEXP"] = (sample_mean_exp, "mean exposure in background sample")
+        hdu.header["BGMODMN"] = (
+            model_mean_counts,
+            "mean clipped model counts/pixel in sample",
+        )
+        hdu.header["BGRMSE"] = (rmse, "sample RMS residual of affine fit")
+        hdu.header["BGCLIP"] = (clipped_neg, "n negative model pixels clipped to zero")
+        hdu.header["BGFMODE"] = (fit_mode, "affine fit mode")
         hdu.header["BG_SRC"] = (str(counts_path), "source counts image")
         hdu.writeto(bg_path, overwrite=True)
 
         out_lines.append(
-            f"{inst}\t{band}\t{base}\t{bg_path.resolve()}"
-            f"\t{fraction:.6g}\t{outside_radius_fraction:.6g}"
-            f"\t{mean_counts:.6g}\t{constant:.6g}"
-            f"\t{cx:.2f}\t{cy:.2f}\t{radius:.2f}\t{n_sample}"
+            f"{inst}\t{band}\t{base}\t{pointing}\t{bg_path.resolve()}"
+            f"\t{fraction:.6g}\t{outside_radius_fraction:.6g}\t{yesno(use_exposure_term)}"
+            f"\t{sample_mean_counts:.6g}\t{sample_mean_exp:.6g}"
+            f"\t{fit_a:.6g}\t{fit_b:.6g}\t{used_a:.6g}\t{used_b:.6g}"
+            f"\t{model_mean_counts:.6g}\t{rmse:.6g}\t{clipped_neg}"
+            f"\t{cx:.2f}\t{cy:.2f}\t{radius:.2f}\t{n_sample}\t{fit_mode}"
         )
 
     out_manifest.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
@@ -1564,13 +3101,28 @@ def cheese_qc(
 
     for band in bands:
         band_rows = [row for row in rows if row[index["band"]] == band]
+        box_paths: list[Path] = []
+        for row in band_rows:
+            key = (row[index["inst"]], band, row[index["base"]])
+            exp_ref = maps_exp_vig.get(key)
+            if exp_ref is not None and exp_ref.is_file():
+                box_paths.append(exp_ref)
+            else:
+                box_paths.append(Path(row[index["cheesed_exposure_vig"]]))
+        band_boxes_display = _boxes_from_image_paths(
+            box_paths, flip_for_display=True
+        )
+        band_boxes_native = _boxes_from_image_paths(box_paths)
 
         # cheese_mask mosaic (binary white/black on black background).
         mask_paths = [Path(r[index["cheese_mask"]]) for r in band_rows]
         mask_acc, mask_used = mosaic(mask_paths, "max")
         if mask_acc is not None:
             png = outdir / f"{band}_cheese_mask_mosaic.png"
-            write_gray_png(png, scaled_mask_image(mask_acc))
+            mask_img = scaled_mask_image(mask_acc)
+            for x0, x1, y0, y1 in band_boxes_display:
+                draw_border(mask_img, x0, x1, y0, y1)
+            write_gray_png(png, mask_img)
             summary.append(f"{band}\tcheese_mask\t{mask_used}\tmax\t{png}")
 
         # counts mosaic with red overlay on excluded pixels. We mosaic the
@@ -1631,6 +3183,8 @@ def cheese_qc(
                 alpha3 = alpha[..., None]
                 rgb = (1.0 - alpha3) * rgb + alpha3 * red
             rgb_u8 = np.clip(rgb, 0.0, 255.0).astype(np.uint8)
+            for x0, x1, y0, y1 in band_boxes_display:
+                draw_border(rgb_u8, x0, x1, y0, y1)
             png = outdir / f"{band}_cheesed_counts_mosaic.png"
             write_rgb_png(png, rgb_u8)
             summary.append(f"{band}\tcheesed_counts\t{counts_used}\tsum+overlay\t{png}")
@@ -1640,8 +3194,26 @@ def cheese_qc(
         exp_acc, exp_used = mosaic(exp_paths, "sum")
         if exp_acc is not None:
             png = outdir / f"{band}_cheesed_exposure_vig_mosaic.png"
-            write_gray_png(png, scaled_log_image(exp_acc))
+            exp_img = scaled_log_image(exp_acc)
+            for x0, x1, y0, y1 in band_boxes_display:
+                draw_border(exp_img, x0, x1, y0, y1)
+            write_gray_png(png, exp_img)
             summary.append(f"{band}\tcheesed_exposure_vig\t{exp_used}\tsum\t{png}")
+
+        # background mosaic: summed cheesed simple background maps.
+        if "cheesed_background" in index:
+            bg_paths = [Path(r[index["cheesed_background"]]) for r in band_rows]
+            bg_acc, bg_used = mosaic(bg_paths, "sum")
+            if bg_acc is not None:
+                png = outdir / f"{band}_cheesed_background_mosaic.png"
+                _save_mosaic_png(
+                    png,
+                    bg_acc,
+                    "linear_percentile",
+                    f"{band} cheesed background (counts/pixel)",
+                    boxes=band_boxes_native,
+                )
+                summary.append(f"{band}\tcheesed_background\t{bg_used}\tsum\t{png}")
 
     (outdir / "cheese_qc_summary.tsv").write_text(
         "\n".join(summary) + "\n", encoding="utf-8"
@@ -1780,6 +3352,8 @@ def cheese_qc(
                 continue
 
         rgb_u8 = np.clip(rgb, 0.0, 255.0).astype(np.uint8)
+        for x0, x1, y0, y1 in band_boxes_display:
+            draw_border(rgb_u8, x0, x1, y0, y1)
         png = outdir / f"{band}_cheese_sources_overlay.png"
         write_rgb_png(png, rgb_u8)
         summary.append(f"{band}\tsources_overlay\t{len(band_rows)}\toverlay\t{png}")
@@ -1813,6 +3387,17 @@ def event_mosaic(
         f"plot_pixels {nx} {ny}",
         f"soft_hard_split_ev {split_ev:g}",
     ]
+    boxes: list[tuple[int, int, int, int]] = []
+    for path in events:
+        hdul, x, y, _pi = event_columns(path)
+        full = valid_sky(x, y)
+        if np.any(full):
+            box = _event_box_from_xy(
+                x[full], y[full], extent, nx, ny, flip_for_display=True
+            )
+            if box is not None:
+                boxes.append(box)
+        hdul.close()
 
     for tag, (lo, hi) in {"soft": (None, split_ev), "hard": (split_ev, None)}.items():
         image = np.zeros((ny, nx), dtype=float)
@@ -1835,7 +3420,10 @@ def event_mosaic(
                 total += int(good.sum())
             hdul.close()
 
-        write_gray_png(out / f"{tag}_mosaic.png", scaled_log_image(image))
+        rendered = scaled_log_image(image)
+        for x0, x1, y0, y1 in boxes:
+            draw_border(rendered, x0, x1, y0, y1)
+        write_gray_png(out / f"{tag}_mosaic.png", rendered)
         summary.append(f"{tag}_events {total}")
 
     (out / "mosaic_summary.txt").write_text("\n".join(summary) + "\n", encoding="utf-8")
@@ -1865,10 +3453,16 @@ def main(argv: list[str]) -> int:
         maps_grid(*args)
     elif cmd == "maps-grid" and len(args) == 5:
         maps_grid(args[0], args[1], args[2], args[3], args[4])
+    elif cmd == "flare-qc" and len(args) in {2, 3}:
+        flare_qc(args[0], args[1], args[2] if len(args) == 3 else "20")
     elif cmd == "maps-qc" and len(args) in {2, 3}:
         maps_qc(args[0], args[1], args[2] if len(args) == 3 else None)
-    elif cmd == "maps-background" and len(args) == 4:
+    elif cmd == "maps-background" and len(args) in {4, 5}:
         maps_background(*args)
+    elif cmd == "frames-split-events" and len(args) in {4, 5, 6, 7, 8}:
+        frames_split_events(*args)
+    elif cmd == "maps-split-pointings" and len(args) in {7, 8, 9}:
+        maps_split_pointings(*args)
     elif cmd == "cheese-qc" and len(args) in {2, 3}:
         cheese_qc(args[0], args[1], args[2] if len(args) == 3 else None)
     elif cmd == "fits-rows" and len(args) == 1:
@@ -1877,6 +3471,12 @@ def main(argv: list[str]) -> int:
         fits_table_hdu(args[0], args[1] if len(args) == 2 else "SRCLIST")
     elif cmd == "fits-table-has-column" and len(args) == 3:
         fits_table_has_column(*args)
+    elif cmd == "image-positive-pixels" and len(args) == 1:
+        image_positive_pixels(*args)
+    elif cmd == "zero-image-like" and len(args) in {2, 3}:
+        zero_image_like(args[0], args[1], args[2] if len(args) == 3 else "float32")
+    elif cmd == "empty-srclist" and len(args) == 1:
+        empty_srclist(*args)
     elif cmd == "apply-image-mask" and len(args) in {3, 4}:
         apply_image_mask(
             args[0], args[1], args[2], args[3] if len(args) == 4 else "image"
@@ -1902,10 +3502,13 @@ def main(argv: list[str]) -> int:
             "clean-band-labels CONFIG | clean-band-table CONFIG | clean-expr CONFIG DETECTOR LABEL | "
             "maps-band-table CONFIG | maps-clean-labels CONFIG MAP_LABEL | maps-expr CONFIG DETECTOR LABEL | "
             "maps-grid OUTDIR BIN_PHYS PAD_FRAC MANIFEST_DIR [DETECTORS] | "
+            "flare-qc FLARE_GTI_SUMMARY OUTDIR [MAX_PANELS] | "
             "maps-qc MAPS_MANIFEST OUTDIR [BACKGROUND_MANIFEST] | "
-            "maps-background MAPS_MANIFEST OUTDIR FRACTION OUTSIDE_RADIUS_FRACTION | "
+            "maps-background MAPS_MANIFEST OUTDIR FRACTION OUTSIDE_RADIUS_FRACTION [USE_EXPOSURE_TERM] | "
+            "frames-split-events RAW_MANIFEST ATTHK DETECTOR OUTDIR [SPLIT_BASES] [MODE] [THRESHOLD_AMIN] [MIN_DURATION_S] | "
             "cheese-qc CHEESE_MANIFEST OUTDIR [MAPS_MANIFEST] | "
             "fits-rows FITS | fits-table-hdu FITS [PREFERRED] | fits-table-has-column FITS TABLE COLUMN | "
+            "image-positive-pixels IMAGE | zero-image-like TEMPLATE OUT [DTYPE] | empty-srclist OUT | "
             "apply-image-mask IMAGE MASK OUT [image|mask] | "
             "combine-masks DETMASK REGMASK OUT | "
             "fov-mask EXPOSURE OUT | "

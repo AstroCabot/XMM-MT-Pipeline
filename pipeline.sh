@@ -13,6 +13,7 @@ MAPS_RERUN_FROM=""
 CHEESE_RERUN_FROM=""
 BG_FRACTION_OVERRIDE=""
 BG_OUTSIDE_RADIUS_OVERRIDE=""
+BG_USE_EXPOSURE_OVERRIDE=""
 
 usage() {
   cat <<'EOF'
@@ -21,18 +22,22 @@ Usage: ./pipeline.sh [stage] [--config FILE] [--force] [--qc] [--print-env] [--n
 Stages:
   init       Prepare SAS ODF state.
   repro      Run epproc/emproc and write raw EPIC manifests.
+  frames     Split multi-pointing repro event lists into per-pointing frames.
   clean      Apply flare GTIs and PPS-style band event filters.
   maps       Make SAS count, exposure, and hard-band source products.
   maps-background
-             Compute flat constant background images from existing maps
-             products without rerunning the rest of the maps stage.
+             Compute simple background images from existing maps products
+             without rerunning the rest of the maps stage.
   cheese     Make hard-band point-source masks and masked map images.
-  all        Run init, repro, clean, maps, and cheese.
+  stack      Build comet-frame event lists and stacked cheesed maps.
+  all        Run init, repro, frames, clean, maps, cheese, and stack.
   qc-init    QC init outputs.
   qc-repro   QC repro outputs.
+  qc-frames  QC frames outputs.
   qc-clean   QC clean outputs.
   qc-maps    QC maps outputs.
   qc-cheese  QC cheese outputs.
+  qc-stack   QC stack outputs.
   qc         Run all implemented QC stages.
   env        Print output/sas_setup.env.
 
@@ -57,19 +62,21 @@ Options:
                   images:  re-apply the existing cheese mask to every
                            band.
   --bg-fraction VAL
-                  Override maps_background_fraction from config (used by
-                  the maps-background sub-stage).
+                 Override maps_background_fraction from config. In v9 this is
+                 an overall scale applied to the fitted a+b*E background model.
   --bg-outside-radius VAL
-                  Override maps_background_outside_radius_fraction from
-                  config. The mean of the counts image is taken from
-                  pixels OUTSIDE a central circle of radius VAL * 0.5 *
-                  min(width, height).
+                 Override maps_background_outside_radius_fraction from
+                 config. The background fit sample uses pixels OUTSIDE a
+                 central circle sized relative to each pointing footprint.
+  --bg-use-exposure yes|no
+                 Override maps_background_use_exposure_term from config.
+                 yes fits a + b*E; no fits a flat constant-only background.
 EOF
 }
 
 while (($#)); do
   case "$1" in
-    init|repro|clean|maps|maps-background|cheese|all|qc-init|qc-repro|qc-clean|qc-maps|qc-cheese|qc|env) STAGE="$1"; shift ;;
+    init|repro|frames|clean|maps|maps-background|cheese|stack|all|qc-init|qc-repro|qc-frames|qc-clean|qc-maps|qc-cheese|qc-stack|qc|env) STAGE="$1"; shift ;;
     --config|-c) CONFIG="$2"; shift 2 ;;
     --force|-f) FORCE=1; shift ;;
     --qc) RUN_QC=1; shift ;;
@@ -79,6 +86,7 @@ while (($#)); do
     --cheese-from) CHEESE_RERUN_FROM="$2"; shift 2 ;;
     --bg-fraction) BG_FRACTION_OVERRIDE="$2"; shift 2 ;;
     --bg-outside-radius) BG_OUTSIDE_RADIUS_OVERRIDE="$2"; shift 2 ;;
+    --bg-use-exposure) BG_USE_EXPOSURE_OVERRIDE="$2"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -90,6 +98,7 @@ is_yes() { [[ "${1,,}" == "1" || "${1,,}" == "y" || "${1,,}" == "yes" || "${1,,}
 
 need_cmd "$PYTHON"
 need_file "$SCRIPT_DIR/tools.py"
+need_file "$SCRIPT_DIR/stack_tools.py"
 need_file "$CONFIG"
 eval "$("$PYTHON" "$SCRIPT_DIR/tools.py" shell "$CONFIG")"
 [[ -n "${DETECTORS:-}" ]] || { echo "No detectors selected" >&2; exit 1; }
@@ -113,6 +122,8 @@ INITDIR="$WORKDIR/init"
 REAL_INITDIR="$REAL_WORKDIR/init"
 REPRODIR="$WORKDIR/repro"
 REAL_REPRODIR="$REAL_WORKDIR/repro"
+FRAMESDIR="$WORKDIR/frames"
+REAL_FRAMESDIR="$REAL_WORKDIR/frames"
 CLEANDIR="$WORKDIR/clean"
 REAL_CLEANDIR="$REAL_WORKDIR/clean"
 GTIDIR="$CLEANDIR/gti"
@@ -122,8 +133,10 @@ MAPSDIR="$WORKDIR/maps"
 REAL_MAPSDIR="$REAL_WORKDIR/maps"
 CHEESEDIR="$WORKDIR/cheese"
 REAL_CHEESEDIR="$REAL_WORKDIR/cheese"
+STACKDIR="$WORKDIR/stack"
+REAL_STACKDIR="$REAL_WORKDIR/stack"
 LOGDIR="$WORKDIR/logs"
-mkdir -p "$INITDIR" "$REPRODIR" "$CLEANDIR" "$MAPSDIR" "$CHEESEDIR" "$LOGDIR"
+mkdir -p "$INITDIR" "$REPRODIR" "$FRAMESDIR" "$CLEANDIR" "$MAPSDIR" "$CHEESEDIR" "$STACKDIR" "$LOGDIR"
 
 on_error() {
   local status=$? line="${BASH_LINENO[0]:-?}" cmd="${BASH_COMMAND:-?}"
@@ -461,6 +474,70 @@ stage_repro() {
   echo "Wrote $REAL_WORKDIR/attitude.env"
 }
 
+frames_manifest_path() {
+  echo "$REAL_FRAMESDIR/manifest/${1}_frames.txt"
+}
+
+frames_stage_complete() {
+  local inst manifest
+  [[ -s "$REAL_FRAMESDIR/.complete" ]] || return 1
+  for inst in $DETECTORS; do
+    manifest="$(frames_manifest_path "$inst")"
+    manifest_paths_exist "$manifest" || return 1
+  done
+}
+
+stage_frames() {
+  local inst raw_manifest summary
+
+  if ! repro_products_ready; then
+    stage_repro
+  fi
+
+  if [[ "$FORCE" != "1" ]] && frames_stage_complete; then
+    echo "Skipping frames; found existing frame manifests in $REAL_WORKDIR/frames"
+    return 0
+  fi
+
+  need_file "$REAL_WORKDIR/attitude.env"
+  # shellcheck source=/dev/null
+  source "$REAL_WORKDIR/attitude.env"
+  need_file "${ATTHKGEN_FILE:-}"
+
+  mkdir -p "$FRAMESDIR/manifest"
+  if [[ "$FORCE" == "1" ]]; then
+    rm -f "$FRAMESDIR/.complete" "$FRAMESDIR/frames.tsv" "$FRAMESDIR/manifest/"*_frames.txt "$FRAMESDIR/manifest/"*_frames.tsv
+    rm -rf "$FRAMESDIR/events"
+  fi
+
+  for inst in $DETECTORS; do
+    raw_manifest="$REAL_REPRODIR/manifest/${inst}_raw.txt"
+    manifest_paths_exist "$raw_manifest" || { echo "Missing or stale raw manifest: $raw_manifest" >&2; exit 1; }
+    "$PYTHON" "$SCRIPT_DIR/tools.py" frames-split-events \
+      "$raw_manifest" \
+      "$ATTHKGEN_FILE" \
+      "$inst" \
+      "$FRAMESDIR" \
+      "${FRAMES_SPLIT_BASES:-}" \
+      "${FRAMES_SPLIT_MODE:-auto}" \
+      "${FRAMES_SPLIT_THRESHOLD_AMIN:-1.0}" \
+      "${FRAMES_SPLIT_MIN_DURATION_S:-1000.0}"
+  done
+
+  {
+    printf 'inst\tsource_base\tbase\tpointing\tsplit\tevent\tn_rows\tt_start\tt_stop\tduration_s\tra\tdec\tn_samples\n'
+    for inst in $DETECTORS; do
+      summary="$REAL_FRAMESDIR/manifest/${inst}_frames.tsv"
+      [[ -s "$summary" ]] || continue
+      tail -n +2 "$summary"
+    done
+  } | write_if_changed "$REAL_FRAMESDIR/frames.tsv"
+
+  date -u +%FT%TZ > "$FRAMESDIR/.complete"
+  echo "Wrote $REAL_FRAMESDIR/manifest"
+  echo "Wrote $REAL_FRAMESDIR/frames.tsv"
+}
+
 clean_gti_enabled() {
   is_yes "${CLEAN_GTI_ENABLED:-yes}"
 }
@@ -541,21 +618,15 @@ clean_manifest_for_detector() {
 }
 
 clean_stage_complete() {
-  local inst label manifest legacy
-  if [[ -s "$REAL_CLEANDIR/.complete" ]]; then
-    for inst in $DETECTORS; do
-      while IFS= read -r label; do
-        [[ -n "$label" ]] || continue
-        manifest="$REAL_CLEANDIR/manifest/${inst}_${label}_clean_files.txt"
-        clean_manifest_valid "$manifest" || return 1
-      done < <(clean_band_labels)
-    done
-    return 0
-  fi
-
+  local inst label manifest
+  [[ -s "$REAL_CLEANDIR/.complete" ]] || return 1
   for inst in $DETECTORS; do
-    legacy="$(clean_manifest_for_detector "$inst" || true)"
-    [[ -n "$legacy" ]] || return 1
+    cmp -s "$REAL_CLEANDIR/manifest/${inst}_frames_input.txt" "$(frames_manifest_path "$inst")" || return 1
+    while IFS= read -r label; do
+      [[ -n "$label" ]] || continue
+      manifest="$REAL_CLEANDIR/manifest/${inst}_${label}_clean_files.txt"
+      clean_manifest_valid "$manifest" || return 1
+    done < <(clean_band_labels)
   done
 }
 
@@ -604,8 +675,7 @@ clean_one_event() {
 
   rows="$("$PYTHON" "$SCRIPT_DIR/tools.py" fits-rows "$outfile")"
   if [[ "$rows" -le 0 ]]; then
-    echo "No events left after cleaning: $outfile" >&2
-    rm -f "$outfile"
+    echo "No events left after cleaning; keeping empty filtered file: $outfile" >&2
     return 0
   fi
 
@@ -613,11 +683,11 @@ clean_one_event() {
 }
 
 stage_clean() {
-  local inst label rawlist evt base gti outfile
+  local inst label rawlist evt base gti outfile reset_clean=0
   local labels=()
 
-  if ! repro_products_ready; then
-    stage_repro
+  if ! frames_stage_complete; then
+    stage_frames
   fi
 
   if [[ "$FORCE" != "1" ]] && clean_stage_complete; then
@@ -630,14 +700,18 @@ stage_clean() {
   done < <(clean_band_labels)
   [[ "${#labels[@]}" -gt 0 ]] || { echo "No clean bands configured" >&2; exit 1; }
 
+  for inst in $DETECTORS; do
+    cmp -s "$REAL_CLEANDIR/manifest/${inst}_frames_input.txt" "$(frames_manifest_path "$inst")" || reset_clean=1
+  done
+
   set_sas_clean_env
   need_cmd evselect
   need_cmd attcalc
   clean_gti_enabled && need_cmd tabgtigen
 
-  if [[ "$FORCE" == "1" ]]; then
+  if [[ "$FORCE" == "1" || "$reset_clean" == "1" ]]; then
     shopt -s nullglob
-    rm -f "$CLEANDIR/.complete" "$CLEANDIR/clean_band_filters.tsv" "$CLEANDIR/manifest/"*_clean_files.txt
+    rm -f "$CLEANDIR/.complete" "$CLEANDIR/clean_band_filters.tsv" "$CLEANDIR/manifest/"*_clean_files.txt "$CLEANDIR/manifest/"*_frames_input.txt
     rm -f "$CLEANDIR/events/"*/*_clean.fits "$CLEANDIR/events/"*/*/*_clean.fits
     rm -f "$GTIDIR/"*/*_flare_gti.fits "$LIGHTCURVEDIR/"*/*_flare_lc.fits
     shopt -u nullglob
@@ -651,7 +725,7 @@ stage_clean() {
   fi
 
   for inst in $DETECTORS; do
-    rawlist="$REAL_REPRODIR/manifest/${inst}_raw.txt"
+    rawlist="$REAL_FRAMESDIR/manifest/${inst}_frames.txt"
     manifest_paths_exist "$rawlist" || { echo "Missing or stale raw manifest: $rawlist" >&2; exit 1; }
 
     while IFS= read -r evt; do
@@ -676,6 +750,7 @@ stage_clean() {
       write_clean_band_manifest "$inst" "$label"
     done
     write_clean_manifest "$inst"
+    cp -f "$rawlist" "$CLEANDIR/manifest/${inst}_frames_input.txt"
   done
 
   date -u +%FT%TZ > "$CLEANDIR/.complete"
@@ -690,6 +765,9 @@ maps_stage_complete() {
   local src_inst src_base src_bands source_list
   local have=0
   [[ -s "$REAL_MAPSDIR/.complete" && -s "$manifest" && -s "$sources" ]] || return 1
+  for inst in $DETECTORS; do
+    cmp -s "$REAL_MAPSDIR/manifest_inputs/${inst}_clean_files.txt" "$REAL_CLEANDIR/manifest/${inst}_clean_files.txt" || return 1
+  done
   while IFS=$'\t' read -r inst label base event counts exp_vig exp_unvig extra; do
     [[ "$inst" == "inst" ]] && continue
     [[ -n "$inst" ]] || continue
@@ -703,6 +781,26 @@ maps_stage_complete() {
     [[ -n "$src_inst" ]] || continue
     [[ -s "$source_list" ]] || return 1
   done < "$sources"
+  [[ "$have" == "1" ]]
+}
+
+maps_background_complete() {
+  local manifest="$REAL_MAPSDIR/maps_background_manifest.tsv"
+  local header inst band base field4 field5 bg have=0 has_pointing=0
+  [[ -s "$REAL_MAPSDIR/.background_complete" && -s "$manifest" ]] || return 1
+  IFS= read -r header < "$manifest" || return 1
+  [[ "$header" == *$'\tpointing\tbackground\t'* ]] && has_pointing=1
+  while IFS=$'\t' read -r inst band base field4 field5 _rest; do
+    [[ "$inst" == "inst" ]] && continue
+    [[ -n "$inst" ]] || continue
+    if [[ "$has_pointing" == "1" ]]; then
+      bg="$field5"
+    else
+      bg="$field4"
+    fi
+    [[ -s "$bg" ]] || return 1
+    have=1
+  done < "$manifest"
   [[ "$have" == "1" ]]
 }
 
@@ -749,10 +847,24 @@ source_bkg_path() {
   echo "$MAPSDIR/sources/$inst/$base/${base}_${label}_source_background.fits"
 }
 
+cheese_maps_background() {
+  local inst="$1" band="$2" base="$3"
+  awk -F'\t' -v inst="$inst" -v band="$band" -v base="$base" \
+    'NR>1 && $1==inst && $2==band && $3==base {print $5; exit}' \
+    "$MAPSDIR/maps_background_manifest.tsv"
+}
+
+stack_maps_event() {
+  local inst="$1" band="$2" base="$3"
+  awk -F'\t' -v inst="$inst" -v band="$band" -v base="$base" \
+    'NR>1 && $1==inst && $2==band && $3==base {print $4; exit}' \
+    "$MAPSDIR/maps_manifest.tsv"
+}
+
 build_map_event_from_clean() {
   local inst="$1" label="$2" base="$3" pimin="$4" pimax="$5" outfile="$6"
   shift 6
-  local partdir part source current next tmp idx=0
+  local partdir part source current next tmp idx=0 first_part="" rows
   local -a parts=()
   [[ "$#" -gt 0 ]] || { echo "No clean event inputs for $inst $label $base" >&2; return 1; }
   mkdir -p "$(dirname "$outfile")"
@@ -769,16 +881,20 @@ build_map_event_from_clean() {
           destruct=yes keepfilteroutput=yes updateexposure=yes writedss=yes \
           expression="(PI in [$pimin:$pimax])"
     fi
-    if [[ "$("$PYTHON" "$SCRIPT_DIR/tools.py" fits-rows "$part")" -gt 0 ]]; then
+    [[ -n "$first_part" ]] || first_part="$part"
+    rows="$("$PYTHON" "$SCRIPT_DIR/tools.py" fits-rows "$part")"
+    if [[ "$rows" -gt 0 ]]; then
       parts+=("$part")
-    else
-      rm -f "$part"
     fi
     idx=$((idx + 1))
   done
-  [[ "${#parts[@]}" -gt 0 ]] || { echo "No clean events overlap maps band $label for $inst $base" >&2; return 1; }
+  [[ -n "$first_part" ]] || { echo "No clean event inputs were generated for $inst $label $base" >&2; return 1; }
 
-  if [[ "${#parts[@]}" -eq 1 ]]; then
+  if [[ "${#parts[@]}" -eq 0 ]]; then
+    if [[ "$FORCE" == "1" || ! -s "$outfile" ]]; then
+      cp -f "$first_part" "$outfile"
+    fi
+  elif [[ "${#parts[@]}" -eq 1 ]]; then
     if [[ "$FORCE" == "1" || ! -s "$outfile" ]]; then
       runlog "maps_${label}_${inst}_${base}_events" \
         evselect table="${parts[0]}:EVENTS" \
@@ -808,10 +924,10 @@ build_map_event_from_clean() {
     fi
   fi
 
-  if [[ "$("$PYTHON" "$SCRIPT_DIR/tools.py" fits-rows "$outfile")" -le 0 ]]; then
-    echo "No events left in maps event file: $outfile" >&2
-    rm -f "$outfile"
-    return 1
+  rows="$("$PYTHON" "$SCRIPT_DIR/tools.py" fits-rows "$outfile")"
+  if [[ "$rows" -le 0 ]]; then
+    echo "No events left in maps event file; keeping empty file: $outfile" >&2
+    return 0
   fi
   attcalc eventset="$outfile" attitudelabel=ahf refpointlabel=pnt withatthkset=yes atthkset="$ATTHKGEN_FILE"
 }
@@ -825,7 +941,7 @@ drop_maps_from() {
   esac
 
   shopt -s globstar nullglob
-  rm -f "$MAPSDIR/.complete" "$MAPSDIR/maps_manifest.tsv" "$MAPSDIR/maps_work.tsv"
+  rm -f "$MAPSDIR/.complete" "$MAPSDIR/.background_complete" "$MAPSDIR/maps_manifest.tsv" "$MAPSDIR/maps_work.tsv" "$MAPSDIR/maps_background_manifest.tsv" "$MAPSDIR/manifest_inputs/"*.txt
 
   case "$step" in
     grid)
@@ -861,15 +977,24 @@ stage_maps() {
   local inst label desc pimin pimax clean_label manifest clean_evt base outdir records input_index
   local map_event counts exp_vig exp_unvig hard_sources hard_local_sources
   local source_bkg source_label source_fitmethod
-  local have_products=0
+  local have_products=0 reset_maps=0
   local -a source_bands=() clean_inputs=()
 
   if ! clean_stage_complete; then
     stage_clean
   fi
 
-  if [[ "$FORCE" != "1" && -z "$MAPS_RERUN_FROM" ]] && maps_stage_complete; then
-    echo "Skipping maps; found existing maps products in $REAL_WORKDIR/maps"
+  for inst in $DETECTORS; do
+    cmp -s "$REAL_MAPSDIR/manifest_inputs/${inst}_clean_files.txt" "$REAL_CLEANDIR/manifest/${inst}_clean_files.txt" || reset_maps=1
+  done
+
+  if [[ "$FORCE" != "1" && "$reset_maps" == "0" && -z "$MAPS_RERUN_FROM" ]] && maps_stage_complete; then
+    if maps_background_complete; then
+      echo "Skipping maps; found existing maps and background products in $REAL_WORKDIR/maps"
+      return 0
+    fi
+    echo "Skipping maps core; rebuilding missing background products in $REAL_WORKDIR/maps"
+    stage_maps_background
     return 0
   fi
 
@@ -882,7 +1007,7 @@ stage_maps() {
   need_cmd esplinemap
   read -r -a source_bands <<< "$MAP_SOURCE_DETECTION_BANDS"
 
-  if [[ "$FORCE" == "1" ]]; then
+  if [[ "$FORCE" == "1" || "$reset_maps" == "1" ]]; then
     drop_maps_from grid
   else
     drop_maps_from "$MAPS_RERUN_FROM"
@@ -988,7 +1113,7 @@ stage_maps() {
     local -a bkgs=()
     local -a pmins=()
     local -a pmaxs=()
-    local idx
+    local idx source_detect_ok exp_pixels rc
     local band_line rec_inst rec_label rec_base rec_pimin rec_pimax rec_evt rec_counts rec_exp_vig rec_exp_unvig
     for source_label in "${source_bands[@]}"; do
       band_line=""
@@ -1009,22 +1134,57 @@ stage_maps() {
     hard_local_sources="$(source_local_list_path "$inst" "$base")"
     hard_sources="$(source_list_path "$inst" "$base")"
     mkdir -p "$(dirname "$hard_sources")"
+    exp_pixels=0
+    for idx in "${!exps[@]}"; do
+      exp_pixels=$((exp_pixels + $("$PYTHON" "$SCRIPT_DIR/tools.py" image-positive-pixels "${exps[$idx]}")))
+    done
+    bkgs=()
+    if [[ "$exp_pixels" -le 0 ]]; then
+      echo "No positive exposure pixels for $inst/$base; writing empty source products" >&2
+      if [[ "$FORCE" == "1" || ! -s "$hard_local_sources" ]]; then
+        runlog "maps_source_${inst}_${base}_empty_local" \
+          "$PYTHON" "$SCRIPT_DIR/tools.py" empty-srclist "$hard_local_sources"
+      fi
+      for ((idx=0; idx<${#source_bands[@]}; idx++)); do
+        source_label="${source_bands[$idx]}"
+        source_bkg="$(source_bkg_path "$inst" "$base" "$source_label")"
+        bkgs+=("$source_bkg")
+        if [[ "$FORCE" == "1" || ! -s "$source_bkg" ]]; then
+          runlog "maps_source_${inst}_${base}_${source_label}_empty_bkg" \
+            "$PYTHON" "$SCRIPT_DIR/tools.py" zero-image-like "${images[$idx]}" "$source_bkg"
+        fi
+      done
+      if [[ "$FORCE" == "1" || ! -s "$hard_sources" ]]; then
+        runlog "maps_source_${inst}_${base}_empty_map" \
+          "$PYTHON" "$SCRIPT_DIR/tools.py" empty-srclist "$hard_sources"
+      fi
+      printf '%s\t%s\t%s\t%s\n' "$inst" "$base" "${source_bands[*]}" "$(readlink -f "$hard_sources")" >> "$MAPSDIR/source_manifest.tsv"
+      continue
+    fi
+
+    source_detect_ok=0
     if [[ "$FORCE" == "1" || ! -s "$hard_local_sources" ]]; then
+      set +e
       runlog "maps_source_${inst}_${base}_ebox_local" \
         eboxdetect imagesets="${images[*]}" boxlistset="$hard_local_sources" \
           expimagesets="${exps[*]}" \
           withexpimage=yes usemap=no \
           likemin="$MAP_EBOX_LIKEMIN_LOCAL" boxsize="$MAP_EBOX_BOXSIZE" nruns="$MAP_EBOX_NRUNS" \
           pimin="${pmins[*]}" pimax="${pmaxs[*]}"
+      rc=$?
+      set -e
+      [[ "$rc" -eq 0 ]] || source_detect_ok=1
     fi
-    bkgs=()
+    [[ -s "$hard_local_sources" ]] || source_detect_ok=1
+
     for ((idx=0; idx<${#source_bands[@]}; idx++)); do
       source_label="${source_bands[$idx]}"
       source_bkg="$(source_bkg_path "$inst" "$base" "$source_label")"
       bkgs+=("$source_bkg")
-      if [[ "$FORCE" == "1" || ! -s "$source_bkg" ]]; then
+      if [[ "$source_detect_ok" -eq 0 && ( "$FORCE" == "1" || ! -s "$source_bkg" ) ]]; then
         source_fitmethod="${MAP_BKG_FITMETHOD:-model}"
         if [[ "$source_fitmethod" == "model" ]]; then
+          set +e
           runlog "maps_source_${inst}_${base}_${source_label}_esplinemap" \
             esplinemap imageset="${images[$idx]}" boxlistset="$hard_local_sources" bkgimageset="$source_bkg" \
               fitmethod="$source_fitmethod" \
@@ -1035,7 +1195,10 @@ stage_maps() {
               mlmin="$MAP_BKG_MLMIN" scut="$MAP_BKG_SCUT" \
               nsplinenodes="$MAP_BKG_NSPLINENODES" excesssigma="$MAP_BKG_EXCESSSIGMA" nfitrun="$MAP_BKG_NFITRUN" \
               snrmin="$MAP_BKG_SNRMIN" smoothsigma="$MAP_BKG_SMOOTHSIGMA"
+          rc=$?
+          set -e
         else
+          set +e
           runlog "maps_source_${inst}_${base}_${source_label}_esplinemap" \
             esplinemap imageset="${images[$idx]}" boxlistset="$hard_local_sources" bkgimageset="$source_bkg" \
               fitmethod="$source_fitmethod" \
@@ -1046,24 +1209,55 @@ stage_maps() {
               mlmin="$MAP_BKG_MLMIN" scut="$MAP_BKG_SCUT" \
               nsplinenodes="$MAP_BKG_NSPLINENODES" excesssigma="$MAP_BKG_EXCESSSIGMA" nfitrun="$MAP_BKG_NFITRUN" \
               snrmin="$MAP_BKG_SNRMIN" smoothsigma="$MAP_BKG_SMOOTHSIGMA"
+          rc=$?
+          set -e
         fi
+        [[ "$rc" -eq 0 ]] || source_detect_ok=1
       fi
+      [[ -s "$source_bkg" ]] || source_detect_ok=1
     done
-    if [[ "$FORCE" == "1" || ! -s "$hard_sources" ]]; then
+
+    if [[ "$source_detect_ok" -eq 0 && ( "$FORCE" == "1" || ! -s "$hard_sources" ) ]]; then
+      set +e
       runlog "maps_source_${inst}_${base}_ebox_map" \
         eboxdetect imagesets="${images[*]}" boxlistset="$hard_sources" \
           bkgimagesets="${bkgs[*]}" usemap=yes \
           expimagesets="${exps[*]}" withexpimage=yes \
           likemin="$MAP_EBOX_LIKEMIN_LOCAL" boxsize="$MAP_EBOX_BOXSIZE" nruns="$MAP_EBOX_NRUNS" \
           pimin="${pmins[*]}" pimax="${pmaxs[*]}"
+      rc=$?
+      set -e
+      [[ "$rc" -eq 0 ]] || source_detect_ok=1
+    fi
+    [[ -s "$hard_sources" ]] || source_detect_ok=1
+
+    if [[ "$source_detect_ok" -ne 0 ]]; then
+      echo "Source detection failed or produced empty outputs for $inst/$base; falling back to empty source products" >&2
+      runlog "maps_source_${inst}_${base}_fallback_local" \
+        "$PYTHON" "$SCRIPT_DIR/tools.py" empty-srclist "$hard_local_sources"
+      bkgs=()
+      for ((idx=0; idx<${#source_bands[@]}; idx++)); do
+        source_label="${source_bands[$idx]}"
+        source_bkg="$(source_bkg_path "$inst" "$base" "$source_label")"
+        bkgs+=("$source_bkg")
+        runlog "maps_source_${inst}_${base}_${source_label}_fallback_bkg" \
+          "$PYTHON" "$SCRIPT_DIR/tools.py" zero-image-like "${images[$idx]}" "$source_bkg"
+      done
+      runlog "maps_source_${inst}_${base}_fallback_map" \
+        "$PYTHON" "$SCRIPT_DIR/tools.py" empty-srclist "$hard_sources"
     fi
     printf '%s\t%s\t%s\t%s\n' "$inst" "$base" "${source_bands[*]}" "$(readlink -f "$hard_sources")" >> "$MAPSDIR/source_manifest.tsv"
   done
 
+  mkdir -p "$MAPSDIR/manifest_inputs"
+  for inst in $DETECTORS; do
+    cp -f "$REAL_CLEANDIR/manifest/${inst}_clean_files.txt" "$MAPSDIR/manifest_inputs/${inst}_clean_files.txt"
+  done
   date -u +%FT%TZ > "$MAPSDIR/.complete"
   echo "Wrote $REAL_MAPSDIR/maps_manifest.tsv"
   echo "Wrote $REAL_MAPSDIR/source_manifest.tsv"
   echo "Wrote $REAL_MAPSDIR/grid.env"
+  stage_maps_background
 }
 
 stage_maps_background() {
@@ -1073,12 +1267,20 @@ stage_maps_background() {
   fi
   local fraction="${BG_FRACTION_OVERRIDE:-$MAPS_BACKGROUND_FRACTION}"
   local outside_radius="${BG_OUTSIDE_RADIUS_OVERRIDE:-$MAPS_BACKGROUND_OUTSIDE_RADIUS_FRACTION}"
+  local use_exposure="${BG_USE_EXPOSURE_OVERRIDE:-$MAPS_BACKGROUND_USE_EXPOSURE_TERM}"
   [[ -n "$fraction" ]] || { echo "Missing background fraction" >&2; exit 1; }
   [[ -n "$outside_radius" ]] || { echo "Missing background outside-radius fraction" >&2; exit 1; }
+  [[ -n "$use_exposure" ]] || { echo "Missing background exposure-term mode" >&2; exit 1; }
   local outdir="$MAPSDIR"
-  echo "Computing flat background maps at fraction=$fraction outside_radius=$outside_radius"
+
+  rm -f "$MAPSDIR/.background_complete" "$MAPSDIR/maps_background_manifest.tsv"
+  rm -rf "$MAPSDIR/background"
+
+  local model_text="constant"
+  is_yes "$use_exposure" && model_text="a+b*E"
+  echo "Computing background maps (scale=$fraction, model=$model_text, outside_radius=$outside_radius)"
   "$PYTHON" "$SCRIPT_DIR/tools.py" maps-background \
-    "$REAL_MAPSDIR/maps_manifest.tsv" "$outdir" "$fraction" "$outside_radius"
+    "$REAL_MAPSDIR/maps_manifest.tsv" "$outdir" "$fraction" "$outside_radius" "$use_exposure"
   date -u +%FT%TZ > "$MAPSDIR/.background_complete"
   echo "Wrote $REAL_MAPSDIR/maps_background_manifest.tsv"
 }
@@ -1086,15 +1288,19 @@ stage_maps_background() {
 cheese_stage_complete() {
   local manifest="$REAL_CHEESEDIR/cheese_manifest.tsv"
   local header
-  local inst label base source_list global_region base_mask cheesemask cheesed_counts cheesed_exp_vig
+  local inst label base source_list global_region base_mask cheesemask cheesed_counts cheesed_exp_vig cheesed_background
   local have=0
   [[ -s "$REAL_CHEESEDIR/.complete" && -s "$manifest" ]] || return 1
+  cmp -s "$REAL_CHEESEDIR/manifest_inputs/maps_manifest.tsv" "$REAL_MAPSDIR/maps_manifest.tsv" || return 1
+  cmp -s "$REAL_CHEESEDIR/manifest_inputs/maps_background_manifest.tsv" "$REAL_MAPSDIR/maps_background_manifest.tsv" || return 1
+  cmp -s "$REAL_CHEESEDIR/manifest_inputs/source_manifest.tsv" "$REAL_MAPSDIR/source_manifest.tsv" || return 1
   IFS= read -r header < "$manifest"
-  while IFS=$'\t' read -r inst label base source_list global_region base_mask cheesemask cheesed_counts cheesed_exp_vig; do
+  [[ "$header" == *$'\tcheesed_background' ]] || return 1
+  while IFS=$'\t' read -r inst label base source_list global_region base_mask cheesemask cheesed_counts cheesed_exp_vig cheesed_background; do
     [[ "$inst" == "inst" ]] && continue
     [[ -n "$inst" ]] || continue
     have=1
-    for path in "$source_list" "$base_mask" "$cheesemask" "$cheesed_counts" "$cheesed_exp_vig"; do
+    for path in "$source_list" "$base_mask" "$cheesemask" "$cheesed_counts" "$cheesed_exp_vig" "$cheesed_background"; do
       [[ -s "$path" ]] || return 1
     done
   done < "$manifest"
@@ -1103,7 +1309,7 @@ cheese_stage_complete() {
 
 write_cheese_manifest_header() {
   mkdir -p "$CHEESEDIR"
-  printf 'inst\tband\tbase\tsource_list\tglobal_region\tbase_mask\tcheese_mask\tcheesed_counts\tcheesed_exposure_vig\n' > "$CHEESEDIR/cheese_manifest.tsv"
+  printf 'inst\tband\tbase\tsource_list\tglobal_region\tbase_mask\tcheese_mask\tcheesed_counts\tcheesed_exposure_vig\tcheesed_background\n' > "$CHEESEDIR/cheese_manifest.tsv"
 }
 
 append_cheese_manifest() {
@@ -1184,7 +1390,7 @@ drop_cheese_from() {
   esac
 
   shopt -s globstar nullglob
-  rm -f "$CHEESEDIR/.complete" "$CHEESEDIR/cheese_manifest.tsv"
+  rm -f "$CHEESEDIR/.complete" "$CHEESEDIR/cheese_manifest.tsv" "$CHEESEDIR/manifest_inputs/"*.tsv
 
   case "$step" in
     detect)
@@ -1195,6 +1401,7 @@ drop_cheese_from() {
       rm -f "$CHEESEDIR"/regions/*/*/*_hard_cheese_mask.fits
       rm -f "$CHEESEDIR"/**/*_cheesed_counts.fits
       rm -f "$CHEESEDIR"/**/*_cheesed_exp_vig.fits
+      rm -f "$CHEESEDIR"/**/*_cheesed_background.fits
       ;;
     regions)
       # Keep emllist; rebuild region table, mask, and cheesed images.
@@ -1202,17 +1409,20 @@ drop_cheese_from() {
       rm -f "$CHEESEDIR"/regions/*/*/*_hard_cheese_mask.fits
       rm -f "$CHEESEDIR"/**/*_cheesed_counts.fits
       rm -f "$CHEESEDIR"/**/*_cheesed_exp_vig.fits
+      rm -f "$CHEESEDIR"/**/*_cheesed_background.fits
       ;;
     mask)
       # Keep emllist + region table; rebuild final mask and cheesed images.
       rm -f "$CHEESEDIR"/regions/*/*/*_hard_cheese_mask.fits
       rm -f "$CHEESEDIR"/**/*_cheesed_counts.fits
       rm -f "$CHEESEDIR"/**/*_cheesed_exp_vig.fits
+      rm -f "$CHEESEDIR"/**/*_cheesed_background.fits
       ;;
     images)
       # Just re-apply the existing cheese mask to every band.
       rm -f "$CHEESEDIR"/**/*_cheesed_counts.fits
       rm -f "$CHEESEDIR"/**/*_cheesed_exp_vig.fits
+      rm -f "$CHEESEDIR"/**/*_cheesed_background.fits
       ;;
   esac
   shopt -u globstar nullglob
@@ -1238,7 +1448,8 @@ drop_cheese_from() {
 #                      region/regionmask fail.
 #
 # Then for every (inst, label, base) row in the maps manifest, the same
-# cheese mask is applied to that band's counts and exposure_vig images.
+# cheese mask is applied to that band's counts, exposure_vig, and simple
+# background image.
 #
 # Per-frame eboxdetect/esplinemap is NOT redone here; the maps stage
 # already produces the hard-band local/map source lists and the spline
@@ -1248,15 +1459,19 @@ stage_cheese() {
   local inst base bands source_list
   local maps_hard_counts maps_hard_exp_vig maps_hard_bkg maps_hard_event
   local eml_list src_region fov_mask src_mask cheesemask
-  local label map_event counts exp_vig exp_unvig outdir
-  local cheesed_counts cheesed_exp_vig maps_extra
-  local ecf id_inst flux_cgs eml_rc reg_rc
+  local label map_event counts exp_vig exp_unvig background outdir
+  local cheesed_counts cheesed_exp_vig cheesed_background maps_extra
+  local ecf id_inst flux_cgs eml_rc reg_rc reset_cheese=0
 
   if ! maps_stage_complete; then
     stage_maps
   fi
 
-  if [[ "$FORCE" != "1" && -z "$CHEESE_RERUN_FROM" ]] && cheese_stage_complete; then
+  cmp -s "$REAL_CHEESEDIR/manifest_inputs/maps_manifest.tsv" "$REAL_MAPSDIR/maps_manifest.tsv" || reset_cheese=1
+  cmp -s "$REAL_CHEESEDIR/manifest_inputs/maps_background_manifest.tsv" "$REAL_MAPSDIR/maps_background_manifest.tsv" || reset_cheese=1
+  cmp -s "$REAL_CHEESEDIR/manifest_inputs/source_manifest.tsv" "$REAL_MAPSDIR/source_manifest.tsv" || reset_cheese=1
+
+  if [[ "$FORCE" != "1" && "$reset_cheese" == "0" && -z "$CHEESE_RERUN_FROM" ]] && cheese_stage_complete; then
     echo "Skipping cheese; found existing cheese products in $REAL_WORKDIR/cheese"
     return 0
   fi
@@ -1272,8 +1487,10 @@ stage_cheese() {
     echo "Missing maps source manifest: $MAPSDIR/source_manifest.tsv" >&2; exit 1; }
   [[ -s "$MAPSDIR/maps_manifest.tsv" ]] || {
     echo "Missing maps manifest: $MAPSDIR/maps_manifest.tsv" >&2; exit 1; }
+  [[ -s "$MAPSDIR/maps_background_manifest.tsv" ]] || {
+    echo "Missing maps background manifest: $MAPSDIR/maps_background_manifest.tsv" >&2; exit 1; }
 
-  if [[ "$FORCE" == "1" ]]; then
+  if [[ "$FORCE" == "1" || "$reset_cheese" == "1" ]]; then
     drop_cheese_from detect
   else
     drop_cheese_from "$CHEESE_RERUN_FROM"
@@ -1433,11 +1650,14 @@ stage_cheese() {
     [[ -s "$cheesemask" ]] || { echo "Missing cheese mask: $cheesemask" >&2; exit 1; }
     [[ -s "$source_list" ]] || { echo "Missing source list for $inst/$base" >&2; exit 1; }
     [[ -s "$src_region" ]] || src_region=""
+    background="$(cheese_maps_background "$inst" "$label" "$base")"
+    [[ -s "$background" ]] || { echo "Missing maps background for $inst/$label/$base: $background" >&2; exit 1; }
 
     outdir="$CHEESEDIR/$label/$inst/$base"
     mkdir -p "$outdir"
     cheesed_counts="$outdir/${base}_${label}_cheesed_counts.fits"
     cheesed_exp_vig="$outdir/${base}_${label}_cheesed_exp_vig.fits"
+    cheesed_background="$outdir/${base}_${label}_cheesed_background.fits"
 
     if [[ "$FORCE" == "1" || ! -s "$cheesed_counts" ]]; then
       runlog "cheese_${label}_${inst}_${base}_counts" \
@@ -1447,11 +1667,19 @@ stage_cheese() {
       runlog "cheese_${label}_${inst}_${base}_expvig" \
         "$PYTHON" "$SCRIPT_DIR/tools.py" apply-image-mask "$exp_vig" "$cheesemask" "$cheesed_exp_vig" image
     fi
+    if [[ "$FORCE" == "1" || ! -s "$cheesed_background" ]]; then
+      runlog "cheese_${label}_${inst}_${base}_background" \
+        "$PYTHON" "$SCRIPT_DIR/tools.py" apply-image-mask "$background" "$cheesemask" "$cheesed_background" image
+    fi
 
     append_cheese_manifest "$inst" "$label" "$base" \
-      "$source_list" "$src_region" "$fov_mask" "$cheesemask" "$cheesed_counts" "$cheesed_exp_vig"
+      "$source_list" "$src_region" "$fov_mask" "$cheesemask" "$cheesed_counts" "$cheesed_exp_vig" "$cheesed_background"
   done < "$MAPSDIR/maps_manifest.tsv"
 
+  mkdir -p "$CHEESEDIR/manifest_inputs"
+  cp -f "$REAL_MAPSDIR/maps_manifest.tsv" "$CHEESEDIR/manifest_inputs/maps_manifest.tsv"
+  cp -f "$REAL_MAPSDIR/maps_background_manifest.tsv" "$CHEESEDIR/manifest_inputs/maps_background_manifest.tsv"
+  cp -f "$REAL_MAPSDIR/source_manifest.tsv" "$CHEESEDIR/manifest_inputs/source_manifest.tsv"
   date -u +%FT%TZ > "$CHEESEDIR/.complete"
   echo "Wrote $REAL_CHEESEDIR/cheese_manifest.tsv"
 }
@@ -1531,6 +1759,49 @@ qc_repro() {
   echo "Wrote $qcdir/hard_mosaic.png"
 }
 
+qc_frames() {
+  local qcdir="$WORKDIR/qc/frames" files="$WORKDIR/qc/frames/output_files.txt"
+  local counts="$WORKDIR/qc/frames/manifest_counts.txt" status="$WORKDIR/qc/frames/status.txt"
+  local inst manifest
+  [[ -d "$FRAMESDIR" ]] || { echo "Missing frames output directory: $FRAMESDIR" >&2; exit 1; }
+  mkdir -p "$qcdir"
+
+  {
+    find "$FRAMESDIR" -maxdepth 5 \( -type f -o -type l \) | sort
+  } > "$files"
+
+  {
+    for inst in $DETECTORS; do
+      manifest="$(frames_manifest_path "$inst")"
+      echo "$inst $(count_lines "$manifest")"
+    done
+  } > "$counts"
+
+  {
+    if frames_stage_complete; then
+      echo "frames_stage complete"
+    else
+      echo "frames_stage missing_or_stale"
+    fi
+    for inst in $DETECTORS; do
+      manifest="$(frames_manifest_path "$inst")"
+      manifest_paths_exist "$manifest" && echo "${inst}_frames.txt ok" || echo "${inst}_frames.txt missing_or_stale"
+    done
+  } > "$status"
+
+  [[ -s "$REAL_FRAMESDIR/frames.tsv" ]] && cp -f "$REAL_FRAMESDIR/frames.tsv" "$qcdir/frames.tsv"
+
+  rm -f "$qcdir"/soft*_mosaic.png "$qcdir"/hard*_mosaic.png
+  "$PYTHON" "$SCRIPT_DIR/tools.py" event-mosaic "$REAL_FRAMESDIR/manifest" "$qcdir" "$DETECTORS" "$QC_SOFT_HARD_SPLIT_EV"
+
+  echo "Wrote $files"
+  echo "Wrote $counts"
+  echo "Wrote $status"
+  [[ -s "$qcdir/frames.tsv" ]] && echo "Wrote $qcdir/frames.tsv"
+  echo "Wrote $qcdir/soft_mosaic.png"
+  echo "Wrote $qcdir/hard_mosaic.png"
+}
+
 qc_clean() {
   local qcdir="$WORKDIR/qc/clean" files="$WORKDIR/qc/clean/output_files.txt"
   local counts="$WORKDIR/qc/clean/manifest_counts.txt" status="$WORKDIR/qc/clean/status.txt"
@@ -1575,14 +1846,23 @@ qc_clean() {
   [[ -s "$CLEANDIR/clean_band_filters.tsv" ]] && cp -f "$CLEANDIR/clean_band_filters.tsv" "$qcdir/clean_band_filters.tsv"
   [[ -s "$CLEANDIR/flare_gti_summary.tsv" ]] && cp -f "$CLEANDIR/flare_gti_summary.tsv" "$qcdir/flare_gti_summary.tsv"
 
-  rm -f "$qcdir"/soft*_mosaic.png "$qcdir"/hard*_mosaic.png
+  rm -f "$qcdir"/soft*_mosaic.png "$qcdir"/hard*_mosaic.png \
+    "$qcdir"/clean_lightcurves*.png "$qcdir"/clean_lightcurves.tsv "$qcdir"/clean_lightcurve_pages.tsv
   "$PYTHON" "$SCRIPT_DIR/tools.py" event-mosaic "$REAL_CLEANDIR" "$qcdir" "$DETECTORS" "$QC_SOFT_HARD_SPLIT_EV"
+  if [[ -s "$REAL_CLEANDIR/flare_gti_summary.tsv" ]]; then
+    "$PYTHON" "$SCRIPT_DIR/tools.py" flare-qc "$REAL_CLEANDIR/flare_gti_summary.tsv" "$qcdir"
+  fi
 
   echo "Wrote $files"
   echo "Wrote $counts"
   echo "Wrote $status"
   [[ -s "$qcdir/clean_band_filters.tsv" ]] && echo "Wrote $qcdir/clean_band_filters.tsv"
   [[ -s "$qcdir/flare_gti_summary.tsv" ]] && echo "Wrote $qcdir/flare_gti_summary.tsv"
+  [[ -s "$qcdir/clean_lightcurves.tsv" ]] && echo "Wrote $qcdir/clean_lightcurves.tsv"
+  [[ -s "$qcdir/clean_lightcurve_pages.tsv" ]] && echo "Wrote $qcdir/clean_lightcurve_pages.tsv"
+  if compgen -G "$qcdir/clean_lightcurves_*.png" > /dev/null; then
+    echo "Wrote $qcdir/clean_lightcurves_*.png"
+  fi
   echo "Wrote $qcdir/soft_mosaic.png"
   echo "Wrote $qcdir/hard_mosaic.png"
 }
@@ -1613,6 +1893,7 @@ qc_maps() {
     [[ -s "$REAL_MAPSDIR/maps_band_table.tsv" ]] && echo "maps_band_table.tsv ok" || echo "maps_band_table.tsv missing"
     [[ -s "$REAL_MAPSDIR/source_manifest.tsv" ]] && echo "source_manifest.tsv $(($(count_lines "$REAL_MAPSDIR/source_manifest.tsv") - 1))" || echo "source_manifest.tsv missing"
     [[ -s "$REAL_MAPSDIR/maps_manifest.tsv" ]] && echo "maps_manifest.tsv $(($(count_lines "$REAL_MAPSDIR/maps_manifest.tsv") - 1))" || echo "maps_manifest.tsv missing"
+    [[ -s "$REAL_MAPSDIR/maps_background_manifest.tsv" ]] && echo "maps_background_manifest.tsv $(($(count_lines "$REAL_MAPSDIR/maps_background_manifest.tsv") - 1))" || echo "maps_background_manifest.tsv missing"
   } > "$status"
 
   [[ -s "$MAPSDIR/grid_summary.tsv" ]] && cp -f "$MAPSDIR/grid_summary.tsv" "$qcdir/grid_summary.tsv"
@@ -1649,7 +1930,8 @@ qc_cheese() {
 
   # Trimmed file listing: only the products that matter (per-frame
   # emllist / region / FOV mask / cheese mask under regions/, and the
-  # per-band cheesed_counts / cheesed_exp_vig under <label>/), plus
+  # per-band cheesed_counts / cheesed_exp_vig / cheesed_background under
+  # <label>/), plus
   # cheese_*.log entries. The full recursive find of every artefact
   # was noise.
   {
@@ -1659,7 +1941,7 @@ qc_cheese() {
       -o -name '*_hard_fov_mask.fits' \
       -o -name '*_hard_cheese_mask.fits' \) 2>/dev/null | sort
     find "$CHEESEDIR" -mindepth 3 -maxdepth 4 -type f \
-      \( -name '*_cheesed_counts.fits' -o -name '*_cheesed_exp_vig.fits' \) \
+      \( -name '*_cheesed_counts.fits' -o -name '*_cheesed_exp_vig.fits' -o -name '*_cheesed_background.fits' \) \
       -not -path "$CHEESEDIR/regions/*" 2>/dev/null | sort
     [[ -d "$LOGDIR" ]] && find "$LOGDIR" -maxdepth 1 -type f -name 'cheese_*.log' | sort
   } > "$files"
@@ -1711,11 +1993,12 @@ run_qc_stage() {
   case "$1" in
     init) qc_init ;;
     repro) qc_repro ;;
+    frames) qc_frames ;;
     clean) qc_clean ;;
     maps) qc_maps ;;
     maps-background) qc_maps ;;
     cheese) qc_cheese ;;
-    all|qc) qc_init; qc_repro; qc_clean; qc_maps; qc_cheese ;;
+    all|qc) qc_init; qc_repro; qc_frames; qc_clean; qc_maps; qc_cheese ;;
     *) echo "No QC stage for: $1" >&2; exit 2 ;;
   esac
 }
@@ -1728,13 +2011,15 @@ maybe_run_qc() {
 case "$STAGE" in
   init) stage_init; maybe_run_qc ;;
   repro) stage_repro; maybe_run_qc ;;
+  frames) stage_frames; maybe_run_qc ;;
   clean) stage_clean; maybe_run_qc ;;
   maps) stage_maps; maybe_run_qc ;;
   maps-background) stage_maps_background; maybe_run_qc ;;
   cheese) stage_cheese; maybe_run_qc ;;
-  all) stage_init; stage_repro; stage_clean; stage_maps; stage_cheese; maybe_run_qc ;;
+  all) stage_init; stage_repro; stage_frames; stage_clean; stage_maps; stage_cheese; maybe_run_qc ;;
   qc-init) qc_init ;;
   qc-repro) qc_repro ;;
+  qc-frames) qc_frames ;;
   qc-clean) qc_clean ;;
   qc-maps) qc_maps ;;
   qc-cheese) qc_cheese ;;

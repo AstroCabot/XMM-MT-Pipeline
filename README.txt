@@ -1,4 +1,4 @@
-XMM-Newton diffuse moving-target pipeline, reduction_v6
+XMM-Newton diffuse moving-target pipeline, reduction_v9
 ======================================================
 
 Scope
@@ -11,7 +11,7 @@ The active source files are:
   config.json
   README.txt
 
-For now this version implements init, repro, clean, maps, and cheese.
+For now this version implements init, repro, frames, clean, maps, and cheese.
 Generated products live under output/.
 
 
@@ -22,6 +22,7 @@ Production:
 
   ./pipeline.sh init
   ./pipeline.sh repro
+  ./pipeline.sh frames
   ./pipeline.sh clean
   ./pipeline.sh maps
   ./pipeline.sh cheese
@@ -31,6 +32,7 @@ QC:
 
   ./pipeline.sh qc-init
   ./pipeline.sh qc-repro
+  ./pipeline.sh qc-frames
   ./pipeline.sh qc-clean
   ./pipeline.sh qc-maps
   ./pipeline.sh qc-cheese
@@ -96,6 +98,23 @@ map_bkg_*
   runs local eboxdetect, then esplinemap on the configured source-detection
   band(s), then map-mode eboxdetect, and cheese uses that refined source list.
 
+maps_background_*
+  Controls the post-maps simple background model. reduction_v9 now fits each
+  pointing/band with counts ~= a + b * exposure_vig on the off-source sample
+  pixels when maps_background_use_exposure_term is true. If that key is false,
+  the same stage instead fits a flat constant-only background, which is now
+  the default in reduction_v9. maps_background_fraction is retained as an
+  overall scale factor on the fitted model, so the recommended default is 1.0.
+  maps_background_outside_radius_fraction still controls the central exclusion
+  radius used to define the background-fit sample.
+
+frames_split_*
+  Pointing-splitting controls for the frames stage. The default
+  frames_split_mode is auto, which splits any repro event list containing more
+  than one stable attitude cluster. Optional frames_split_bases can restrict
+  splitting when frames_split_mode is set to list. The legacy maps_split_*
+  keys are still accepted as fallbacks for older configs.
+
 
 Init
 ----
@@ -136,12 +155,32 @@ lists. If the selected manifests, atthk.dat, and attitude.env are already valid,
 the stage skips without requiring SAS in PATH.
 
 
+Frames
+------
+
+frames creates or adopts:
+
+  output/frames/manifest/<detector>_frames.txt
+  output/frames/manifest/<detector>_frames.tsv
+  output/frames/frames.tsv
+  output/frames/events/<detector>/<raw-base>/*_P??_ImagingEvts.ds
+
+frames consumes the repro raw manifests and rewrites them into the event lists
+that downstream stages should treat as the unit of work. Single-pointing event
+lists are passed through unchanged. Multi-pointing packaged exposures are split
+by stable ATTHK attitude clusters and renamed with per-pointing P00/P01/... tags.
+
+This is the stage that turns a chunky packaged exposure like S003 into the
+individual pointings that clean, maps, cheese, and qc now operate on.
+
+
 Clean
 -----
 
 clean creates or adopts:
 
   output/clean/events/<detector>/<band>/*_<band>_clean.fits
+  output/clean/manifest/<detector>_frames_input.txt
   output/clean/manifest/<detector>_<band>_clean_files.txt
   output/clean/manifest/<detector>_clean_files.txt
   output/clean/clean_band_filters.tsv
@@ -149,9 +188,12 @@ clean creates or adopts:
   output/clean/lightcurves/<detector>/*_flare_lc.fits
   output/clean/flare_gti_summary.tsv
 
-One flare GTI is built per raw event list and applied to each configured band.
-The aggregate manifest is kept for compatibility with older products; the
-per-band manifests carry the configured PPS-style filters forward explicitly.
+One flare GTI is built per frames-stage event list and applied to each
+configured band. Empty flare-filtered outputs are kept instead of being deleted
+so downstream stages can still emit zero/empty products for fully rejected
+pointings. The aggregate manifest is kept for compatibility with older
+products; the per-band manifests carry the configured PPS-style filters
+forward explicitly.
 
 
 Maps
@@ -163,6 +205,7 @@ maps creates or adopts:
   output/maps/grid_summary.tsv
   output/maps/maps_band_table.tsv
   output/maps/maps_manifest.tsv
+  output/maps/maps_background_manifest.tsv
   output/maps/source_manifest.tsv
   output/maps/events/<band>/<detector>/*_<band>_map_events.fits
   output/maps/<band>/<detector>/<event>/*_<band>_counts.fits
@@ -173,8 +216,8 @@ maps creates or adopts:
   output/maps/sources/<detector>/<event>/*_source_list.fits
 
 maps consumes the clean-stage event products under output/clean/events/ and
-output/clean/manifest/. It does not rebuild map inputs from raw repro event
-lists.
+output/clean/manifest/, which themselves now trace back to frames-stage
+pointings. It does not rebuild map inputs from raw repro event lists.
 
 The stage now stops at the light-weight SAS source-detection preparation step:
 
@@ -190,6 +233,16 @@ maps does not exclude the central comet zone. The point is to obtain the
 shared hard-band source list and the per-band count/exposure products on a
 common grid before any soft-band background modelling. The hard-band
 background map is only used to improve point-source finding for cheese.
+
+After the core maps products are written, maps also computes the simple
+affine background manifest automatically. The standalone maps-background stage
+is now mainly for rerunning just that background estimate after changing the
+background-fit scale or the off-source sampling radius. The fitted model is
+
+  background ~= scale * (a + b * exposure_vig)
+
+where a and b are least-squares fit on the off-source sample pixels for each
+pointing/band row.
 
 Maps can be rerun from a chosen dependency point without rebuilding upstream
 products:
@@ -236,6 +289,10 @@ cheese creates or adopts:
   output/cheese/<band>/<detector>/<event>/*_<band>_cheesemask.fits
   output/cheese/<band>/<detector>/<event>/*_<band>_cheesed_counts.fits
   output/cheese/<band>/<detector>/<event>/*_<band>_cheesed_exp_vig.fits
+  output/cheese/<band>/<detector>/<event>/*_<band>_cheesed_background.fits
+
+cheese now runs per frames-stage pointing because the maps manifest bases are
+already split at the frames stage.
 
 cheese mirrors the reduction_v8 cheese stage: it builds its own detection
 images at PI [cheese_emin, cheese_emax] (default 1000-4000 eV) by filtering
@@ -263,7 +320,8 @@ sequence:
   combine-masks          base_mask = (detmask > 0) & (regmask > 0)
                          (python helper in tools.py, v8-identical).
   per-band               copy base_mask to each maps band's cheesemask and
-                         multiply counts and vignetted exposure by it.
+                         multiply counts, vignetted exposure, and the simple
+                         maps-background image by it.
 
 If emldetect (or a subsequent region call) fails, cheese degrades gracefully
 by copying the detmask into base_mask — the frame still gets a FOV keep-mask
@@ -318,9 +376,11 @@ qc-cheese also writes PNG mosaics from cheese_manifest.tsv:
   output/qc/cheese/soft_cheese_mask_mosaic.png
   output/qc/cheese/soft_cheesed_counts_mosaic.png
   output/qc/cheese/soft_cheesed_exposure_vig_mosaic.png
+  output/qc/cheese/soft_cheesed_background_mosaic.png
   output/qc/cheese/hard_cheese_mask_mosaic.png
   output/qc/cheese/hard_cheesed_counts_mosaic.png
   output/qc/cheese/hard_cheesed_exposure_vig_mosaic.png
+  output/qc/cheese/hard_cheesed_background_mosaic.png
 
 
 Shortlink Convention
