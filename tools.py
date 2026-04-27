@@ -17,7 +17,8 @@ Subcommands:
                                               Build frames QC + mosaics + timeline.
   qc-clean CLEANDIR FRAMESDIR DETECTORS SPLIT_EV OUTDIR
                                               loE/hiE QC mosaics + flare lightcurves.
-  cut-run CLEANDIR FRAMESDIR OUTDIR CONFIG    Build cut PI-bands with sigma-clip masking.
+  cut-run CLEANDIR FRAMESDIR OUTDIR LOGDIR CONFIG [DETECTORS]
+                                              Build cut PI-bands; emanom CCD drop on MOS.
   qc-cut CUTDIR FRAMESDIR DETECTORS OUTDIR    Cut QC: per-(det,band) mosaics + frame boxes.
   maps-counts CUTDIR MAPSDIR LOGDIR CONFIG    evselect per-frame counts images.
   maps-exposure CUTDIR MAPSDIR ATTHK LOGDIR CONFIG
@@ -705,49 +706,158 @@ def _mosaic_grid(events: list[Path]
     return extent, nx, ny
 
 
-def cut_run(clean_dir: str, frames_dir: str, out_dir: str,
-            config_path: str) -> None:
+_SCIENCE_FILTERS = {"thin1", "thin2", "medium", "thick"}
+
+
+def _frame_filter(clean_event_path: Path) -> str:
+    """Read the FILTER keyword from the cleaned event file's primary header."""
+    with fits.open(clean_event_path, memmap=True) as hdul:
+        return str(hdul[0].header.get("FILTER", "")).strip()
+
+
+def _emanom_bad_ccds(frame_event_path: Path, log_dir: Path,
+                     drop_codes: set[str]) -> tuple[list[int], str]:
+    """Run emanom on a MOS frame event list, return (bad_ccd_numbers, ccd_states).
+
+    Input must be a broad-PI event list (the post-frames file is right —
+    a narrow band-1000 cleaned event has too few corner counts to determine
+    state). emanom writes per-CCD ANOMFL<n> for CCDs 2-7 (the outer ring;
+    CCD1 is the central science chip and is assumed always good).
+
+    drop_codes is a subset of {'G','I','B','O','U'}: 'B' (bad), 'O' (off)
+    are the unambiguous reject states; 'U' (undetermined) and 'I'
+    (intermediate) are typically kept by default and can be added later if
+    a band needs to be conservative.
+    """
+    if not frame_event_path.is_file():
+        die(f"emanom: frame event file missing: {frame_event_path}")
+    tag = f"cut_emanom_{frame_event_path.stem}"
+    corner_file = log_dir / f"{tag}_corner.fits"
+    _run_sas(tag, log_dir, [
+        "emanom",
+        f"eventfile={frame_event_path}",
+        f"cornerfile={corner_file}",
+        "keepcorner=no",
+        "writekeys=yes",
+        "writelog=no",
+    ])
+    with fits.open(frame_event_path, memmap=True) as hdul:
+        hdr = hdul[0].header
+        states = "G" + "".join(
+            str(hdr.get(f"ANOMFL{ccd}", "U")).strip()[:1].upper()
+            for ccd in range(2, 8)
+        )
+    bad = [i + 1 for i, c in enumerate(states) if c.upper() in drop_codes]
+    return bad, states
+
+
+def _merge_tsv_keep_other(out_path: Path, header: str, key_indices: tuple[int, ...],
+                          new_rows: list[str], dets_in_run: set[str]) -> None:
+    """Write header + new_rows + any preserved rows from existing file.
+
+    A row is preserved if its first column (the detector) is NOT in
+    dets_in_run — this is what supports `--detectors M1,M2` rerunning a
+    stage without trampling PN's already-recorded summary rows.
+    """
+    preserved: list[str] = []
+    if out_path.is_file():
+        existing = out_path.read_text(encoding="utf-8").splitlines()
+        if existing and existing[0] == header:
+            for line in existing[1:]:
+                parts = line.split("\t")
+                if parts and parts[0] not in dets_in_run:
+                    preserved.append(line)
+    out_path.write_text(
+        header + "\n" + "\n".join(preserved + new_rows) + "\n",
+        encoding="utf-8",
+    )
+
+
+def cut_run(clean_dir: str, frames_dir: str, out_dir: str, log_dir: str,
+            config_path: str, detectors_arg: str = "") -> None:
     """For each (detector, cut band): concat the cleaned per-PPS-band events,
-    apply the cut PI window, sigma-clip events sitting in pixels brighter
-    than median + N*sigma_MAD of the combined per-detector mosaic, and write
-    per-frame cut FITS preserving the cleaned events' header (so REFXCRVL
-    etc. stay valid for downstream WCS).
+    apply the cut PI window, drop events from MOS CCDs flagged anomalous by
+    emanom, sigma-clip events sitting in pixels brighter than median +
+    N*sqrt(median) of the combined per-detector mosaic, and write per-frame
+    cut FITS preserving the cleaned events' header (so REFXCRVL etc. stay
+    valid for downstream WCS).
     """
     cfg = load_config(config_path)
     cut_bands  = _cut_bands(cfg)
     sigma_thr  = float(cfg.get("cut_sigma_clip", 5.0))
-    detectors  = normalize_detectors(cfg.get("detectors", "PN"))
-    clean = Path(clean_dir); frames = Path(frames_dir); out = Path(out_dir)
+    drop_codes = set(str(s).upper() for s in cfg.get("cut_emanom_drop", ["B", "O", "U"]))
+    detectors = (normalize_detectors(detectors_arg) if detectors_arg.strip()
+                 else normalize_detectors(cfg.get("detectors", "PN")))
+    clean = Path(clean_dir); frames = Path(frames_dir)
+    out = Path(out_dir); log = Path(log_dir)
     (out / "manifest").mkdir(parents=True, exist_ok=True)
 
-    summary = ["det\tband\tpi_min\tpi_max\tn_in\tn_out\tn_clipped\tn_bad_pix\tn_frames"]
     (out / "cut_bands.tsv").write_text(
         "label\tpi_min\tpi_max\n"
         + "\n".join(f"{b['label']}\t{int(b['pi_min'])}\t{int(b['pi_max'])}"
                     for b in cut_bands) + "\n",
         encoding="utf-8",
     )
+
+    summary_rows: list[str] = []
+    emanom_rows:  list[str] = []
+    summary_header = ("det\tband\tpi_min\tpi_max\tn_in\tn_out\t"
+                      "n_clipped\tn_bad_pix\tn_emanom_dropped\tn_frames")
+    emanom_header  = "det\tframe\tfilter\tdecision\tccd_states\tbad_ccds"
+
     for det in detectors:
         frame_paths = _read_manifest(frames / "manifest" / f"{det}_frames.txt")
         if not frame_paths:
             continue
         clean_band_dirs = [d for d in sorted((clean / "events" / det).iterdir())
                            if d.is_dir()]
+
+        # Per-frame filter check + (MOS-only) emanom anomaly state.
+        # Frames with non-science FILTER (Closed, CalClosed, CalThick, ...)
+        # are dropped entirely from cut so they don't contaminate the maps.
+        kept_frames: list[Path] = []
+        bad_per_frame: dict[str, list[int]] = {}
+        for frame in frame_paths:
+            base = frame.stem
+            if not frame.is_file():
+                continue
+            filt = _frame_filter(frame)
+            if filt.lower() not in _SCIENCE_FILTERS:
+                emanom_rows.append(
+                    f"{det}\t{base}\t{filt}\tskipped_non_science\t\t-")
+                continue
+            kept_frames.append(frame)
+            states = ""
+            bad: list[int] = []
+            if _family(det) == "mos":
+                bad, states = _emanom_bad_ccds(frame, log, drop_codes)
+                bad_per_frame[base] = bad
+            emanom_rows.append(
+                f"{det}\t{base}\t{filt}\tkept_science\t{states}\t"
+                + (",".join(str(c) for c in bad) if bad else "-")
+            )
+
         for band in cut_bands:
-            row = _cut_one_band(det, frame_paths, band,
-                                clean_band_dirs, sigma_thr, out)
+            row = _cut_one_band(det, kept_frames, band, clean_band_dirs,
+                                sigma_thr, bad_per_frame, out)
             if row:
-                summary.append(row)
-    (out / "cut_summary.tsv").write_text("\n".join(summary) + "\n", encoding="utf-8")
+                summary_rows.append(row)
+
+    _merge_tsv_keep_other(out / "cut_summary.tsv", summary_header,
+                          (0,), summary_rows, set(detectors))
+    _merge_tsv_keep_other(out / "cut_emanom.tsv", emanom_header,
+                          (0,), emanom_rows, set(detectors))
 
 
 def _cut_one_band(det: str, frame_paths: list[Path], band: dict[str, Any],
                   clean_band_dirs: list[Path], sigma_thr: float,
+                  bad_per_frame: dict[str, list[int]],
                   out_dir: Path) -> str | None:
     label = str(band["label"])
     pi_lo, pi_hi = int(band["pi_min"]), int(band["pi_max"])
 
     per_frame: list[tuple[Path, np.ndarray, Path]] = []
+    n_emanom_dropped = 0
     for frame in frame_paths:
         base = frame.stem
         files = [d / f"{base}_{d.name}_clean.fits" for d in clean_band_dirs]
@@ -768,6 +878,11 @@ def _cut_one_band(det: str, frame_paths: list[Path], band: dict[str, Any],
             continue
         events = np.concatenate(chunks)
         events = events[(events["PI"] >= pi_lo) & (events["PI"] <= pi_hi)]
+        bad_ccds = bad_per_frame.get(base, [])
+        if bad_ccds and "CCDNR" in events.dtype.names:
+            n_before = len(events)
+            events = events[~np.isin(events["CCDNR"], bad_ccds)]
+            n_emanom_dropped += n_before - len(events)
         if len(events):
             per_frame.append((frame, events, src))
     if not per_frame:
@@ -852,7 +967,7 @@ def _cut_one_band(det: str, frame_paths: list[Path], band: dict[str, Any],
                         encoding="utf-8")
 
     return (f"{det}\t{label}\t{pi_lo}\t{pi_hi}\t{n_in}\t{n_out}\t"
-            f"{n_clipped}\t{n_bad_pix}\t{len(per_frame)}")
+            f"{n_clipped}\t{n_bad_pix}\t{n_emanom_dropped}\t{len(per_frame)}")
 
 
 def _band_mosaics(events_by_det_band: dict[str, dict[str, list[Path]]],
@@ -995,17 +1110,19 @@ def _frame_base_from_cut(evt_path: Path, label: str) -> str:
 
 
 def maps_counts(cut_dir: str, maps_dir: str, log_dir: str,
-                config_path: str) -> None:
+                config_path: str, detectors_arg: str = "") -> None:
     """Bin each cut event list into a counts image on a per-frame grid."""
     cfg = load_config(config_path)
     cut_bands = _cut_bands(cfg)
-    detectors = normalize_detectors(cfg.get("detectors", "PN"))
+    detectors = (normalize_detectors(detectors_arg) if detectors_arg.strip()
+                 else normalize_detectors(cfg.get("detectors", "PN")))
     bin_arcsec = float(cfg.get("map_bin_arcsec", 4.0))
     pad_pix = int(cfg.get("map_pad_pix", 1))
 
     cut = Path(cut_dir); maps = Path(maps_dir); log = Path(log_dir)
-    grid_rows = ["det\tband\tbase\tximagemin\tximagemax\tyimagemin"
-                 "\tyimagemax\tbin\tnx\tny"]
+    grid_header = ("det\tband\tbase\tximagemin\tximagemax\tyimagemin"
+                   "\tyimagemax\tbin\tnx\tny")
+    grid_rows: list[str] = []
     for det in detectors:
         for band in cut_bands:
             label = str(band["label"])
@@ -1042,17 +1159,19 @@ def maps_counts(cut_dir: str, maps_dir: str, log_dir: str,
                     f"yimagemax={grid['ymax']:g}",
                     "ignorelegallimits=yes", "writedss=yes",
                 ])
-    (maps / "maps_grid.tsv").write_text("\n".join(grid_rows) + "\n",
-                                        encoding="utf-8")
+    _merge_tsv_keep_other(maps / "maps_grid.tsv", grid_header,
+                          (0,), grid_rows, set(detectors))
     _build_maps_manifest(maps, detectors, cut_bands)
 
 
 def maps_exposure(cut_dir: str, maps_dir: str, atthk_path: str,
-                  log_dir: str, config_path: str) -> None:
+                  log_dir: str, config_path: str,
+                  detectors_arg: str = "") -> None:
     """Build per-frame vignetted exposure maps via eexpmap."""
     cfg = load_config(config_path)
     cut_bands = _cut_bands(cfg)
-    detectors = normalize_detectors(cfg.get("detectors", "PN"))
+    detectors = (normalize_detectors(detectors_arg) if detectors_arg.strip()
+                 else normalize_detectors(cfg.get("detectors", "PN")))
     attrebin = str(cfg.get("map_eexpmap_attrebin", "0.020626481"))
 
     cut = Path(cut_dir); maps = Path(maps_dir); log = Path(log_dir)
@@ -1131,19 +1250,22 @@ def _solve_bkg(c: np.ndarray, e: np.ndarray, mode: str) -> tuple[float, float, f
     return a, b, rmse, name
 
 
-def maps_background(maps_dir: str, config_path: str) -> None:
+def maps_background(maps_dir: str, config_path: str,
+                    detectors_arg: str = "") -> None:
     """Per-frame a + b·E background fit on off-source sample pixels."""
     cfg = load_config(config_path)
     cut_bands = _cut_bands(cfg)
-    detectors = normalize_detectors(cfg.get("detectors", "PN"))
+    detectors = (normalize_detectors(detectors_arg) if detectors_arg.strip()
+                 else normalize_detectors(cfg.get("detectors", "PN")))
     mode = str(cfg.get("map_bkg_constrain", "flat")).strip().lower()
     if mode not in {"none", "nonneg", "flat"}:
         die(f"map_bkg_constrain must be none/nonneg/flat (got {mode!r})")
     outside_frac = float(cfg.get("map_bkg_outside_radius_fraction", 0.5))
 
     maps = Path(maps_dir)
-    summary = ["det\tband\tbase\tfit_a\tfit_b\trmse\tn_sample\t"
-               "center_x\tcenter_y\tradius_pix\tfit_mode"]
+    summary_header = ("det\tband\tbase\tfit_a\tfit_b\trmse\tn_sample\t"
+                      "center_x\tcenter_y\tradius_pix\tfit_mode")
+    summary_rows: list[str] = []
 
     for det in detectors:
         for band in cut_bands:
@@ -1159,9 +1281,9 @@ def maps_background(maps_dir: str, config_path: str) -> None:
                 bkg_path = band_dir / f"{base}_{label}_bkg.fits"
                 row = _fit_one_bkg(counts_path, exp_path, bkg_path,
                                    mode, outside_frac)
-                summary.append(f"{det}\t{label}\t{base}\t{row}")
-    (maps / "bkg_summary.tsv").write_text("\n".join(summary) + "\n",
-                                          encoding="utf-8")
+                summary_rows.append(f"{det}\t{label}\t{base}\t{row}")
+    _merge_tsv_keep_other(maps / "bkg_summary.tsv", summary_header,
+                          (0,), summary_rows, set(detectors))
     _build_maps_manifest(maps, detectors, cut_bands)
 
 
@@ -1217,11 +1339,13 @@ def _fit_one_bkg(counts_path: Path, exp_path: Path, bkg_path: Path,
             f"\t{cx:.2f}\t{cy:.2f}\t{radius:.2f}\t{fit_mode}")
 
 
-def maps_corrected(maps_dir: str, config_path: str) -> None:
+def maps_corrected(maps_dir: str, config_path: str,
+                   detectors_arg: str = "") -> None:
     """(counts - bkg) / exp_vig per frame; not clipped."""
     cfg = load_config(config_path)
     cut_bands = _cut_bands(cfg)
-    detectors = normalize_detectors(cfg.get("detectors", "PN"))
+    detectors = (normalize_detectors(detectors_arg) if detectors_arg.strip()
+                 else normalize_detectors(cfg.get("detectors", "PN")))
     maps = Path(maps_dir)
     for det in detectors:
         for band in cut_bands:
@@ -1259,13 +1383,18 @@ def _make_corrected(counts_path: Path, exp_path: Path, bkg_path: Path,
     fits.PrimaryHDU(data=rate, header=new_header).writeto(out_path, overwrite=True)
 
 
-def _build_maps_manifest(maps_dir: Path, detectors: list[str],
+def _build_maps_manifest(maps_dir: Path, _detectors_unused: list[str],
                          cut_bands: list[dict[str, Any]]) -> None:
+    """Scan every <DET>/<BAND>/ subdir on disk so partial reruns (e.g.
+    --detectors M1,M2) leave PN rows intact in the manifest."""
     rows = ["det\tband\tbase\tcounts\texp_vig\tbkg\tcorrected"]
-    for det in detectors:
-        for band in cut_bands:
-            label = str(band["label"])
-            band_dir = maps_dir / det / label
+    band_labels = [str(b["label"]) for b in cut_bands]
+    for det_dir in sorted(p for p in maps_dir.iterdir() if p.is_dir()):
+        det = det_dir.name
+        if det not in DETECTOR_ALIASES:
+            continue
+        for label in band_labels:
+            band_dir = det_dir / label
             if not band_dir.is_dir():
                 continue
             for counts in sorted(band_dir.glob(f"*_{label}_counts.fits")):
@@ -1331,7 +1460,8 @@ def qc_maps(maps_dir: str, frames_dir: str, detectors_arg: str,
     grids = _read_maps_grid(maps)
     rows = _read_maps_manifest_rows(maps)
 
-    summary = ["det\tband\tnframes\tnx\tny\tnobkg_corrected\tcorrected"]
+    summary = ["det\tband\tnframes\tnx\tny\tcounts\texp_vig\tbkg"
+               "\tnobkg_corrected\tcorrected"]
     box_events = {det: _read_manifest(frames / "manifest" / f"{det}_frames.txt")
                   for det in detectors}
 
@@ -1352,27 +1482,34 @@ def qc_maps(maps_dir: str, frames_dir: str, detectors_arg: str,
             if not keys:
                 continue
             bin_phys = grids[keys[0]]["bin"]
+            # Read actual per-frame image shapes (evselect rounds nx/ny
+            # slightly differently from a naive (xmax-xmin)/bin), and use
+            # those to size the viewing grid so np.sum can broadcast.
+            frame_imgs: list[tuple[dict[str, str], np.ndarray, np.ndarray, np.ndarray]] = []
             xmin = min(grids[k]["xmin"] for k in keys)
             ymin = min(grids[k]["ymin"] for k in keys)
-            xmax = max(grids[k]["xmin"] + grids[k]["nx"] * grids[k]["bin"]
-                       for k in keys)
-            ymax = max(grids[k]["ymin"] + grids[k]["ny"] * grids[k]["bin"]
-                       for k in keys)
-            nx = int(round((xmax - xmin) / bin_phys))
-            ny = int(round((ymax - ymin) / bin_phys))
-            sum_c = np.zeros((ny, nx), dtype=float)
-            sum_e = np.zeros((ny, nx), dtype=float)
-            sum_b = np.zeros((ny, nx), dtype=float)
+            xmax = ymax = float("-inf")
             for r in band_rows:
                 key = (det, band, r["base"])
                 if key not in grids:
                     continue
                 g = grids[key]
-                ix = int(round((g["xmin"] - xmin) / bin_phys))
-                iy = int(round((g["ymin"] - ymin) / bin_phys))
                 cimg, _ = _read_first2d(Path(r["counts"]))
                 eimg, _ = _read_first2d(Path(r["exp_vig"]))
                 bimg, _ = _read_first2d(Path(r["bkg"]))
+                fy, fx = cimg.shape
+                xmax = max(xmax, g["xmin"] + fx * bin_phys)
+                ymax = max(ymax, g["ymin"] + fy * bin_phys)
+                frame_imgs.append((r, cimg, eimg, bimg))
+            nx = int(round((xmax - xmin) / bin_phys))
+            ny = int(round((ymax - ymin) / bin_phys))
+            sum_c = np.zeros((ny, nx), dtype=float)
+            sum_e = np.zeros((ny, nx), dtype=float)
+            sum_b = np.zeros((ny, nx), dtype=float)
+            for r, cimg, eimg, bimg in frame_imgs:
+                g = grids[(det, band, r["base"])]
+                ix = int(round((g["xmin"] - xmin) / bin_phys))
+                iy = int(round((g["ymin"] - ymin) / bin_phys))
                 fy, fx = cimg.shape
                 sum_c[iy:iy+fy, ix:ix+fx] += cimg
                 sum_e[iy:iy+fy, ix:ix+fx] += eimg
@@ -1384,7 +1521,11 @@ def qc_maps(maps_dir: str, frames_dir: str, detectors_arg: str,
                       ymin, ymin + ny * bin_phys)
             boxes = _boxes_from_events(box_events.get(det, []))
 
-            for tag, img in (("nobkg-corrected", nobkg), ("corrected", corr)):
+            for tag, img in (("counts", sum_c),
+                             ("exp_vig", sum_e),
+                             ("bkg", sum_b),
+                             ("nobkg-corrected", nobkg),
+                             ("corrected", corr)):
                 positive = img[img > 0]
                 if positive.size:
                     vmin = float(np.percentile(positive, 5))
@@ -1400,6 +1541,9 @@ def qc_maps(maps_dir: str, frames_dir: str, detectors_arg: str,
                              vmin=vmin, vmax=vmax)
             summary.append(
                 f"{det}\t{band}\t{len(band_rows)}\t{nx}\t{ny}"
+                f"\t{det}_{band}_counts_mosaic.png"
+                f"\t{det}_{band}_exp_vig_mosaic.png"
+                f"\t{det}_{band}_bkg_mosaic.png"
                 f"\t{det}_{band}_nobkg-corrected_mosaic.png"
                 f"\t{det}_{band}_corrected_mosaic.png"
             )
@@ -1993,22 +2137,27 @@ def main(argv: list[str]) -> int:
         qc_frames(*args)
     elif cmd == "qc-clean" and len(args) == 5:
         qc_clean(*args)
-    elif cmd == "cut-run" and len(args) == 4:
-        cut_run(*args)
+    elif cmd == "cut-run" and len(args) in {5, 6}:
+        cut_run(args[0], args[1], args[2], args[3], args[4],
+                args[5] if len(args) == 6 else "")
     elif cmd == "qc-cut" and len(args) == 4:
         qc_cut(*args)
     elif cmd == "build-track" and len(args) == 9:
         build_track(*args)
     elif cmd == "qc-track" and len(args) == 5:
         qc_track(*args)
-    elif cmd == "maps-counts" and len(args) == 4:
-        maps_counts(*args)
-    elif cmd == "maps-exposure" and len(args) == 5:
-        maps_exposure(*args)
-    elif cmd == "maps-background" and len(args) == 2:
-        maps_background(*args)
-    elif cmd == "maps-corrected" and len(args) == 2:
-        maps_corrected(*args)
+    elif cmd == "maps-counts" and len(args) in {4, 5}:
+        maps_counts(args[0], args[1], args[2], args[3],
+                    args[4] if len(args) == 5 else "")
+    elif cmd == "maps-exposure" and len(args) in {5, 6}:
+        maps_exposure(args[0], args[1], args[2], args[3], args[4],
+                      args[5] if len(args) == 6 else "")
+    elif cmd == "maps-background" and len(args) in {2, 3}:
+        maps_background(args[0], args[1],
+                        args[2] if len(args) == 3 else "")
+    elif cmd == "maps-corrected" and len(args) in {2, 3}:
+        maps_corrected(args[0], args[1],
+                       args[2] if len(args) == 3 else "")
     elif cmd == "qc-maps" and len(args) == 4:
         qc_maps(*args)
     else:

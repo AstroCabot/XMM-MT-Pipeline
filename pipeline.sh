@@ -29,6 +29,7 @@ CONFIG="$SCRIPT_DIR/config.json"
 PYTHON="${PYTHON:-python3}"
 STAGE=""
 FORCE=0
+DETECTORS_OVERRIDE=""
 
 usage() {
   cat <<'EOF'
@@ -57,8 +58,11 @@ Stages:
   qc          Run all qc-* stages.
 
 Options:
-  --config FILE   JSON config (default: ./config.json).
-  --force         Rebuild stage products even if outputs already exist.
+  --config FILE        JSON config (default: ./config.json).
+  --force              Rebuild stage products even if outputs already exist.
+  --detectors LIST     Restrict the run to a comma-separated subset of
+                       detectors (e.g. M1,M2). Existing products for
+                       other detectors are preserved.
 EOF
 }
 
@@ -67,6 +71,7 @@ while (($#)); do
     init|repro|frames|clean|cut|track|maps|maps-counts|maps-exposure|maps-background|maps-corrected|all|qc-init|qc-repro|qc-frames|qc-clean|qc-cut|qc-track|qc-maps|qc) STAGE="$1"; shift ;;
     --config|-c) CONFIG="$2"; shift 2 ;;
     --force|-f)  FORCE=1; shift ;;
+    --detectors|-d) DETECTORS_OVERRIDE="$2"; shift 2 ;;
     -h|--help)   usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -78,6 +83,9 @@ done
 command -v "$PYTHON" >/dev/null  || { echo "Missing python: $PYTHON" >&2; exit 1; }
 
 eval "$("$PYTHON" "$SCRIPT_DIR/tools.py" shell "$CONFIG")"
+if [[ -n "$DETECTORS_OVERRIDE" ]]; then
+  DETECTORS="$(echo "$DETECTORS_OVERRIDE" | tr ',' ' ')"
+fi
 
 INITDIR="$WORKDIR/init"
 REPRODIR="$WORKDIR/repro"
@@ -396,16 +404,27 @@ stage_cut() {
   clean_have_products || stage_clean
 
   if [[ "$FORCE" == "1" ]]; then
-    rm -rf "$CUTDIR"
-    mkdir -p "$CUTDIR/manifest"
+    # When restricting to a subset of detectors, only nuke that subset's
+    # cut events + manifests so others survive the rerun.
+    local det label
+    for det in $DETECTORS; do
+      rm -rf "$CUTDIR/events/$det"
+      for label in $CUT_BAND_LABELS; do
+        rm -f "$CUTDIR/manifest/${det}_${label}_cut.txt"
+      done
+    done
   elif cut_have_products; then
     echo "cut ok: adopted existing products"
     return 0
   fi
 
+  source_sas
+  # shellcheck disable=SC1090
+  source "$SAS_ENV"
+
   log_run cut_run \
     "$PYTHON" "$SCRIPT_DIR/tools.py" cut-run \
-      "$CLEANDIR" "$FRAMESDIR" "$CUTDIR" "$CONFIG"
+      "$CLEANDIR" "$FRAMESDIR" "$CUTDIR" "$LOGDIR" "$CONFIG" "$DETECTORS"
   echo "cut ok"
 }
 
@@ -440,17 +459,25 @@ stage_track() {
 
 # ---------- stage: maps ----------
 
+_force_rm_per_det() {
+  # Remove only the in-scope detectors' maps products with a given suffix.
+  local suffix="$1" det
+  for det in $DETECTORS; do
+    rm -f "$MAPSDIR/$det"/*/"*${suffix}"
+  done
+}
+
 stage_maps_counts() {
   cut_have_products || stage_cut
   source_sas
   # shellcheck disable=SC1090
   source "$SAS_ENV"
   if [[ "$FORCE" == "1" ]]; then
-    rm -f "$MAPSDIR"/*/*/*_counts.fits "$MAPSDIR/maps_grid.tsv"
+    _force_rm_per_det "_counts.fits"
   fi
   log_run maps_counts \
     "$PYTHON" "$SCRIPT_DIR/tools.py" maps-counts \
-      "$CUTDIR" "$MAPSDIR" "$LOGDIR" "$CONFIG"
+      "$CUTDIR" "$MAPSDIR" "$LOGDIR" "$CONFIG" "$DETECTORS"
   echo "maps-counts ok"
 }
 
@@ -462,33 +489,33 @@ stage_maps_exposure() {
   # shellcheck disable=SC1090
   source "$ATT_ENV"
   if [[ "$FORCE" == "1" ]]; then
-    rm -f "$MAPSDIR"/*/*/*_exp_vig.fits
+    _force_rm_per_det "_exp_vig.fits"
   fi
   log_run maps_exposure \
     "$PYTHON" "$SCRIPT_DIR/tools.py" maps-exposure \
-      "$CUTDIR" "$MAPSDIR" "$ATTHK_FILE" "$LOGDIR" "$CONFIG"
+      "$CUTDIR" "$MAPSDIR" "$ATTHK_FILE" "$LOGDIR" "$CONFIG" "$DETECTORS"
   echo "maps-exposure ok"
 }
 
 stage_maps_background() {
   [[ -s "$MAPSDIR/maps_manifest.tsv" ]] || stage_maps_exposure
   if [[ "$FORCE" == "1" ]]; then
-    rm -f "$MAPSDIR"/*/*/*_bkg.fits "$MAPSDIR/bkg_summary.tsv"
+    _force_rm_per_det "_bkg.fits"
   fi
   log_run maps_background \
     "$PYTHON" "$SCRIPT_DIR/tools.py" maps-background \
-      "$MAPSDIR" "$CONFIG"
+      "$MAPSDIR" "$CONFIG" "$DETECTORS"
   echo "maps-background ok"
 }
 
 stage_maps_corrected() {
   [[ -s "$MAPSDIR/bkg_summary.tsv" ]] || stage_maps_background
   if [[ "$FORCE" == "1" ]]; then
-    rm -f "$MAPSDIR"/*/*/*_corrected.fits
+    _force_rm_per_det "_corrected.fits"
   fi
   log_run maps_corrected \
     "$PYTHON" "$SCRIPT_DIR/tools.py" maps-corrected \
-      "$MAPSDIR" "$CONFIG"
+      "$MAPSDIR" "$CONFIG" "$DETECTORS"
   echo "maps-corrected ok"
 }
 

@@ -20,6 +20,7 @@
     {"label": "hard", "pi_min": 1001, "pi_max": 4000}
   ],
   "cut_sigma_clip": Infinity,
+  "cut_emanom_drop": ["B", "O"],
 
   "target_id": "C/2025 N1",
   "target_id_type": "smallbody",
