@@ -1,164 +1,53 @@
 {
-  "workdir": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Cambridge/X3I/reduction_v9/output",
+  "workdir": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Cambridge/X3I/reduction_v10/output",
   "odfdir": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/ODF",
 
-  "shortlink_name": "c2025n1_v9",
-  "keep_shortlink": true,
-  "shortlink_max_path": 60,
-
   "sas_setup_script": "/home/scabot/Programs/sas/xmmsas_22.1.0-a8f2c2afa-20250304/setsas.sh",
-  "sas_ccfpath": "",
+  "sas_ccfpath": "/home/scabot/Programs/sas/ccf",
   "sas_verbosity": "4",
-  "detectors": "PN",
-  "ahf_input": "",
-  "qc_soft_hard_split_ev": 1000,
 
-  "clean_gti_enabled": true,
-  "clean_gti_rate_cut": 4.80001211,
-  "clean_gti_timebin": 10,
+  "detectors": ["PN", "M1", "M2"],
+  "qc_split_ev": 1000,
+
+  "map_bin_arcsec": 4.0,
+  "map_pad_pix": 1,
+  "map_eexpmap_attrebin": "0.020626481",
+  "map_bkg_constrain": "flat",
+  "map_bkg_outside_radius_fraction": 0.5,
+
+  "cut_bands": [
+    {"label": "soft", "pi_min": 200,  "pi_max": 1000},
+    {"label": "hard", "pi_min": 1001, "pi_max": 4000}
+  ],
+  "cut_sigma_clip": Infinity,
+
+  "target_id": "C/2025 N1",
+  "target_id_type": "smallbody",
+  "track_observer": "500@-125989",
+  "track_step": "1m",
+  "track_input": "",
+
   "clean_gti_pi_min": 7000,
   "clean_gti_pi_max": 15000,
+  "clean_gti_timebin": 10,
   "clean_gti_pattern_max": 0,
+  "clean_gti_rate_cut": {"PN": 4.80001211, "M1": 0.5, "M2": 0.5},
+
   "clean_bands": [
-    {
-      "label": "1000",
-      "description": "0.2-0.5 keV",
-      "pi_ranges": [[201, 500]],
-      "pn": {
-        "pattern_min": 0,
-        "pattern_max": 0,
-        "flag": "(FLAG & 0x2fb002c)==0",
-        "extra": ["RAWY>=13"]
-      },
-      "mos": {
-        "pattern_min": 0,
-        "pattern_max": 12,
-        "flag": "#XMMEA_EM",
-        "extra": []
-      }
-    },
-    {
-      "label": "2000",
-      "description": "0.5-1.0 keV",
-      "pi_ranges": [[501, 1000]],
-      "pn": {
-        "pattern_min": 0,
-        "pattern_max": 4,
-        "flag": "(FLAG & 0x2fb002c)==0",
-        "extra": ["RAWY>=13"]
-      },
-      "mos": {
-        "pattern_min": 0,
-        "pattern_max": 12,
-        "flag": "#XMMEA_EM",
-        "extra": []
-      }
-    },
-    {
-      "label": "3000",
-      "description": "1.0-2.0 keV",
-      "pi_ranges": [[1001, 2000]],
-      "pn": {
-        "pattern_min": 0,
-        "pattern_max": 4,
-        "flag": "(FLAG & 0x2fb0024)==0",
-        "extra": ["RAWY>=13"]
-      },
-      "mos": {
-        "pattern_min": 0,
-        "pattern_max": 12,
-        "flag": "#XMMEA_EM",
-        "extra": []
-      }
-    },
-    {
-      "label": "4000",
-      "description": "2.0-4.5 keV",
-      "pi_ranges": [[2001, 4500]],
-      "pn": {
-        "pattern_min": 0,
-        "pattern_max": 4,
-        "flag": "(FLAG & 0x2fb0024)==0",
-        "extra": ["RAWY>=13"]
-      },
-      "mos": {
-        "pattern_min": 0,
-        "pattern_max": 12,
-        "flag": "#XMMEA_EM",
-        "extra": []
-      }
-    },
-    {
-      "label": "5000",
-      "description": "4.5-12.0 keV",
-      "pi_ranges": [[4501, 7800], [8201, 12000]],
-      "pn": {
-        "pattern_min": 0,
-        "pattern_max": 4,
-        "flag": "(FLAG & 0x2fb0024)==0",
-        "extra": ["RAWY>=13"]
-      },
-      "mos": {
-        "pattern_min": 0,
-        "pattern_max": 12,
-        "flag": "#XMMEA_EM",
-        "extra": []
-      }
-    }
-  ],
-
-  "map_bin_phys": 80,
-  "map_pad_frac": 0.08,
-  "map_soft_hard_split_ev": 1000,
-  "map_pi_min": 201,
-  "map_pi_max": 12000,
-  "map_eexpmap_attrebin": "0.020626481",
-  "map_source_detection_bands": ["hard"],
-  "map_source_detection_idband": 1,
-  "map_ebox_likemin_local": 8,
-  "map_ebox_boxsize": 5,
-  "map_ebox_nruns": 3,
-  "map_bkg_fitmethod": "model",
-  "map_bkg_mlmin": 1,
-  "map_bkg_scut": 0.01,
-  "map_bkg_nsplinenodes": 12,
-  "map_bkg_nfitrun": 3,
-  "map_bkg_excesssigma": 4,
-  "map_bkg_snrmin": 30,
-  "map_bkg_smoothsigma": 6,
-  "maps_background_fraction": 1.0,
-  "maps_background_use_exposure_term": false,
-  "maps_background_outside_radius_fraction": 0.5,
-  "maps_split_bases": ["S003"],
-  "maps_split_threshold_amin": 1.0,
-  "maps_split_min_duration_s": 1000.0,
-
-  "cheese_emin": 1000,
-  "cheese_emax": 4000,
-  "cheese_mlmin": 10,
-  "cheese_flux": 0.2,
-  "cheese_ecf_pn": 3.2,
-  "cheese_ecf_mos": 1.65,
-  "cheese_emask_thresh1": 0.3,
-  "cheese_emask_thresh2": 0.5,
-  "cheese_region_energyfraction": 0.9,
-  "cheese_region_fixedradius": 12,
-  "cheese_region_bkgfraction": 0.6,
-  "cheese_source_radius_pix": 4,
-  "cheese_esplinemap_nsplinenodes": 20,
-  "cheese_esplinemap_excesssigma": 4,
-  "cheese_esplinemap_nfitrun": 3,
-  "cheese_esplinemap_snrmin": 30,
-  "cheese_esplinemap_smoothsigma": 15,
-  "cheese_esplinemap_scut": 0.01,
-  "cheese_esplinemap_mlmin": 1,
-  "cheese_eboxdetect_nruns": 3,
-  "cheese_eboxdetect_boxsize": 5,
-
-  "link_odf_constituents": true,
-  "skip_odf_link_patterns": [
-    "*.gz.gpg",
-    "*.tar.gz",
-    "*.tar"
+    {"label": "1000", "description": "0.2-0.5 keV", "pi_ranges": [[201, 500]],
+     "pn":  {"pattern_min": 0, "pattern_max": 0,  "flag": "(FLAG & 0x2fb002c)==0", "extra": ["RAWY>=13"]},
+     "mos": {"pattern_min": 0, "pattern_max": 12, "flag": "#XMMEA_EM",            "extra": []}},
+    {"label": "2000", "description": "0.5-1.0 keV", "pi_ranges": [[501, 1000]],
+     "pn":  {"pattern_min": 0, "pattern_max": 4,  "flag": "(FLAG & 0x2fb002c)==0", "extra": ["RAWY>=13"]},
+     "mos": {"pattern_min": 0, "pattern_max": 12, "flag": "#XMMEA_EM",            "extra": []}},
+    {"label": "3000", "description": "1.0-2.0 keV", "pi_ranges": [[1001, 2000]],
+     "pn":  {"pattern_min": 0, "pattern_max": 4,  "flag": "(FLAG & 0x2fb0024)==0", "extra": ["RAWY>=13"]},
+     "mos": {"pattern_min": 0, "pattern_max": 12, "flag": "#XMMEA_EM",            "extra": []}},
+    {"label": "4000", "description": "2.0-4.5 keV", "pi_ranges": [[2001, 4500]],
+     "pn":  {"pattern_min": 0, "pattern_max": 4,  "flag": "(FLAG & 0x2fb0024)==0", "extra": ["RAWY>=13"]},
+     "mos": {"pattern_min": 0, "pattern_max": 12, "flag": "#XMMEA_EM",            "extra": []}},
+    {"label": "5000", "description": "4.5-12.0 keV", "pi_ranges": [[4501, 7800], [8201, 12000]],
+     "pn":  {"pattern_min": 0, "pattern_max": 4,  "flag": "(FLAG & 0x2fb0024)==0", "extra": ["RAWY>=13"]},
+     "mos": {"pattern_min": 0, "pattern_max": 12, "flag": "#XMMEA_EM",            "extra": []}}
   ]
 }
