@@ -14,6 +14,14 @@
   "map_eexpmap_attrebin": "0.020626481",
   "map_bkg_constrain": "flat",
   "map_bkg_outside_radius_fraction": 0.5,
+  "map_bkg_scale": {
+    "PN": {"soft": 1.0, "hard": 1.0},
+    "M1": {"soft": 1.0, "hard": 1.0},
+    "M2": {"soft": 1.0, "hard": 1.0}
+  },
+  "map_bkg_sigma_clip": 5.0,
+  "map_bkg_taper_quantile": 0.5,
+  "exp_floor_quantile": 0.05,
 
   "cut_bands": [
     {"label": "soft", "pi_min": 200,  "pi_max": 1000},
@@ -21,6 +29,17 @@
   ],
   "cut_sigma_clip": Infinity,
   "cut_emanom_drop": ["B", "O"],
+  "cut_min_ontime": 60.0,
+
+  "stack_merge_weights": {"PN": 1.0, "M1": 0.4, "M2": 0.4},
+  "qc_stack_smooth_sigma_px": 3,
+
+  "cheese_band": "hard",
+  "cheese_detection_detectors": ["PN"],
+  "cheese_radius_arcsec": 25.0,
+  "cheese_eboxdetect_likemin": 12,
+  "cheese_eboxdetect_boxsize": 5,
+  "cheese_eboxdetect_nruns": 3,
 
   "target_id": "C/2025 N1",
   "target_id_type": "smallbody",

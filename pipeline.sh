@@ -16,6 +16,13 @@
 #   maps   per-frame counts/exposure_vig/bkg/corrected images on a per-frame
 #          physical grid (4 arcsec/pix default); separable substages
 #          maps-counts, maps-exposure, maps-background, maps-corrected
+#   cheese hard-band all-detector source detection (greedy peak find on the
+#          co-added rate map) + per-frame event/map masking; substages
+#          cheese-detect and cheese-mask
+#   stack  per-event time-resolved shift to the comet co-moving frame using
+#          the track ephemeris, plus per-(det,band) co-added stacked
+#          counts/exp_vig/bkg/corrected maps; substages stack-events and
+#          stack-coadd
 #
 # Both stages adopt existing on-disk products: if the expected output files
 # exist they are accepted, only book-keeping (PATH rewrite, manifests, env
@@ -47,7 +54,14 @@ Stages:
   maps-exposure    eexpmap per-frame vignetted exposure maps.
   maps-background  Per-frame a + b*E fit on off-source pixels.
   maps-corrected   Per-frame (counts - bkg) / exp_vig.
-  all         Run init, repro, frames, clean, cut, track, maps.
+  cheese           Run cheese-detect + cheese-mask.
+  cheese-detect    Detect sources on co-added hard rate map; sources.tsv + mask.fits.
+  cheese-mask      Apply mask to per-frame events + maps; write *_cheesed.fits.
+  stack            Run stack-events + stack-coadd + stack-merge.
+  stack-events     Per-event time-resolved shift to the comet co-moving frame.
+  stack-coadd      Bin shifted events + shift+sum exp_vig/bkg into per-(det,band) stacks.
+  stack-merge      Pure-Python merge of per-detector stacks onto a common grid.
+  all         Run init, repro, frames, clean, cut, track, maps, cheese, stack.
   qc-init     QC products for init.
   qc-repro    QC products for repro (listing, status, loE/hiE mosaics).
   qc-frames   QC products for frames (listing, status, mosaics, timeline).
@@ -55,6 +69,8 @@ Stages:
   qc-cut      QC products for cut (per-(det,band) mosaics with frame boxes).
   qc-track    Cut mosaics with comet trajectory overlay.
   qc-maps     Per-(det, band) nobkg-corrected and corrected mosaics.
+  qc-cheese   Per-(det, band) cheesed mosaics with sources circled.
+  qc-stack    Per-(det, band) stacked counts/exp/bkg/corrected mosaics.
   qc          Run all qc-* stages.
 
 Options:
@@ -68,7 +84,7 @@ EOF
 
 while (($#)); do
   case "$1" in
-    init|repro|frames|clean|cut|track|maps|maps-counts|maps-exposure|maps-background|maps-corrected|all|qc-init|qc-repro|qc-frames|qc-clean|qc-cut|qc-track|qc-maps|qc) STAGE="$1"; shift ;;
+    init|repro|frames|clean|cut|track|maps|maps-counts|maps-exposure|maps-background|maps-corrected|cheese|cheese-detect|cheese-mask|stack|stack-events|stack-coadd|stack-merge|all|qc-init|qc-repro|qc-frames|qc-clean|qc-cut|qc-track|qc-maps|qc-cheese|qc-stack|qc) STAGE="$1"; shift ;;
     --config|-c) CONFIG="$2"; shift 2 ;;
     --force|-f)  FORCE=1; shift ;;
     --detectors|-d) DETECTORS_OVERRIDE="$2"; shift 2 ;;
@@ -94,6 +110,8 @@ CLEANDIR="$WORKDIR/clean"
 CUTDIR="$WORKDIR/cut"
 TRACKDIR="$WORKDIR/track"
 MAPSDIR="$WORKDIR/maps"
+CHEESEDIR="$WORKDIR/cheese"
+STACKDIR="$WORKDIR/stack"
 LOGDIR="$WORKDIR/logs"
 QCDIR="$WORKDIR/qc"
 SAS_ENV="$WORKDIR/sas_setup.env"
@@ -103,7 +121,7 @@ TRACK_FITS="$TRACKDIR/track.fits"
 TRACK_JSON="$TRACKDIR/track.json"
 mkdir -p "$INITDIR" "$REPRODIR/manifest" "$FRAMESDIR/manifest" \
          "$CLEANDIR/manifest" "$CUTDIR/manifest" "$TRACKDIR" \
-         "$MAPSDIR" "$LOGDIR"
+         "$MAPSDIR" "$CHEESEDIR" "$STACKDIR" "$LOGDIR"
 
 trap 'echo "[ERR] line $LINENO: $BASH_COMMAND" >&2' ERR
 
@@ -527,6 +545,150 @@ stage_maps() {
   echo "maps ok"
 }
 
+# ---------- stage: cheese ----------
+
+cheese_have_products() {
+  [[ -s "$CHEESEDIR/sources.tsv" && -s "$CHEESEDIR/mask.fits" ]] || return 1
+  local det label
+  for det in $DETECTORS; do
+    for label in $CUT_BAND_LABELS; do
+      manifest_paths_exist "$CHEESEDIR/manifest/${det}_${label}_cheesed.txt" \
+        || return 1
+    done
+  done
+}
+
+stage_cheese_detect() {
+  [[ -s "$MAPSDIR/maps_manifest.tsv" ]] || stage_maps
+  source_sas
+  # shellcheck disable=SC1090
+  source "$SAS_ENV"
+  if [[ "$FORCE" == "1" ]]; then
+    rm -rf "$CHEESEDIR/srclists"
+    rm -f "$CHEESEDIR/sources.tsv" "$CHEESEDIR/mask.fits" \
+          "$CHEESEDIR/cheese_summary.tsv"
+  fi
+  log_run cheese_detect \
+    "$PYTHON" "$SCRIPT_DIR/tools.py" cheese-detect \
+      "$MAPSDIR" "$CUTDIR" "$CHEESEDIR" "$LOGDIR" "$CONFIG" "$DETECTORS"
+  echo "cheese-detect ok"
+}
+
+stage_cheese_mask() {
+  [[ -s "$CHEESEDIR/sources.tsv" && -s "$CHEESEDIR/mask.fits" ]] \
+    || stage_cheese_detect
+  if [[ "$FORCE" == "1" ]]; then
+    local det label
+    for det in $DETECTORS; do
+      rm -rf "$CHEESEDIR/events/$det" "$CHEESEDIR/maps/$det"
+      for label in $CUT_BAND_LABELS; do
+        rm -f "$CHEESEDIR/manifest/${det}_${label}_cheesed.txt"
+      done
+    done
+  fi
+  log_run cheese_mask \
+    "$PYTHON" "$SCRIPT_DIR/tools.py" cheese-mask \
+      "$MAPSDIR" "$CUTDIR" "$CHEESEDIR" "$CONFIG" "$DETECTORS"
+  echo "cheese-mask ok"
+}
+
+stage_cheese() {
+  stage_cheese_detect
+  stage_cheese_mask
+  echo "cheese ok"
+}
+
+# ---------- stage: stack ----------
+
+stack_have_products() {
+  [[ -s "$STACKDIR/stack_summary.tsv" ]] || return 1
+  local det label
+  for det in $DETECTORS; do
+    for label in $CUT_BAND_LABELS; do
+      [[ -s "$STACKDIR/${det}_${label}_corrected.fits" ]] || return 1
+      manifest_paths_exist "$STACKDIR/manifest/${det}_${label}_stack.txt" \
+        || return 1
+    done
+  done
+}
+
+stage_stack_events() {
+  cheese_have_products || stage_cheese
+  [[ -s "$TRACK_FITS" && -s "$TRACK_ENV" ]] || stage_track
+  if [[ "$FORCE" == "1" ]]; then
+    local det label
+    for det in $DETECTORS; do
+      rm -rf "$STACKDIR/events/$det"
+      for label in $CUT_BAND_LABELS; do
+        rm -f "$STACKDIR/manifest/${det}_${label}_stack.txt"
+      done
+    done
+  fi
+  log_run stack_events \
+    "$PYTHON" "$SCRIPT_DIR/tools.py" stack-events \
+      "$CHEESEDIR" "$TRACK_FITS" "$TRACK_ENV" "$STACKDIR" "$CONFIG" "$DETECTORS"
+  echo "stack-events ok"
+}
+
+stage_stack_coadd() {
+  [[ -s "$STACKDIR/manifest/$(echo $DETECTORS | awk '{print $1}')_$(echo $CUT_BAND_LABELS | awk '{print $1}')_stack.txt" ]] \
+    || stage_stack_events
+  if [[ "$FORCE" == "1" ]]; then
+    local det label
+    for det in $DETECTORS; do
+      for label in $CUT_BAND_LABELS; do
+        rm -f "$STACKDIR/${det}_${label}_counts.fits" \
+              "$STACKDIR/${det}_${label}_exp_vig.fits" \
+              "$STACKDIR/${det}_${label}_bkg.fits" \
+              "$STACKDIR/${det}_${label}_corrected.fits"
+      done
+    done
+  fi
+  log_run stack_coadd \
+    "$PYTHON" "$SCRIPT_DIR/tools.py" stack-coadd \
+      "$CHEESEDIR" "$STACKDIR" "$TRACK_FITS" "$TRACK_ENV" "$CONFIG" "$DETECTORS"
+  echo "stack-coadd ok"
+}
+
+stage_stack_merge() {
+  local det label
+  for det in $DETECTORS; do
+    for label in $CUT_BAND_LABELS; do
+      [[ -s "$STACKDIR/${det}_${label}_corrected.fits" ]] \
+        || stage_stack_coadd
+    done
+  done
+  if [[ "$FORCE" == "1" ]]; then
+    for label in $CUT_BAND_LABELS; do
+      rm -f "$STACKDIR/merged_${label}_counts.fits" \
+            "$STACKDIR/merged_${label}_exp_vig.fits" \
+            "$STACKDIR/merged_${label}_bkg.fits" \
+            "$STACKDIR/merged_${label}_corrected.fits"
+    done
+    rm -f "$STACKDIR/stack_merge_summary.tsv"
+  fi
+  # Stale outputs from older SAS-based merger (asmooth + weighted exp).
+  for label in $CUT_BAND_LABELS; do
+    rm -f "$STACKDIR/merged_${label}_exp_vig_weighted.fits" \
+          "$STACKDIR/merged_${label}_smoothed.fits" \
+          "$STACKDIR/merged_${label}_smoothed_counts.fits" \
+          "$STACKDIR/merged_${label}_smoothed_bkg.fits" \
+          "$STACKDIR/merged_${label}_template.fits"
+  done
+  rm -rf "$STACKDIR/tmp"
+  log_run stack_merge \
+    "$PYTHON" "$SCRIPT_DIR/tools.py" stack-merge \
+      "$STACKDIR" "$CONFIG" "$DETECTORS"
+  echo "stack-merge ok"
+}
+
+stage_stack() {
+  stage_stack_events
+  stage_stack_coadd
+  stage_stack_merge
+  echo "stack ok"
+}
+
 # ---------- QC stages ----------
 
 stage_qc_init() {
@@ -592,8 +754,27 @@ stage_qc_maps() {
   local out="$QCDIR/maps"
   rm -rf "$out"
   "$PYTHON" "$SCRIPT_DIR/tools.py" qc-maps \
-    "$MAPSDIR" "$FRAMESDIR" "$DETECTORS" "$out"
+    "$MAPSDIR" "$FRAMESDIR" "$DETECTORS" "$out" "$CONFIG"
   echo "qc-maps wrote: $out"
+}
+
+stage_qc_cheese() {
+  [[ -d "$CHEESEDIR" ]] || { echo "missing $CHEESEDIR" >&2; exit 1; }
+  [[ -d "$FRAMESDIR" ]] || { echo "missing $FRAMESDIR" >&2; exit 1; }
+  local out="$QCDIR/cheese"
+  rm -rf "$out"
+  "$PYTHON" "$SCRIPT_DIR/tools.py" qc-cheese \
+    "$CHEESEDIR" "$FRAMESDIR" "$DETECTORS" "$out"
+  echo "qc-cheese wrote: $out"
+}
+
+stage_qc_stack() {
+  [[ -d "$STACKDIR" ]] || { echo "missing $STACKDIR" >&2; exit 1; }
+  local out="$QCDIR/stack"
+  rm -rf "$out"
+  "$PYTHON" "$SCRIPT_DIR/tools.py" qc-stack \
+    "$STACKDIR" "$DETECTORS" "$out" "$CONFIG"
+  echo "qc-stack wrote: $out"
 }
 
 # ---------- dispatch ----------
@@ -610,8 +791,16 @@ case "$STAGE" in
   maps-exposure)    stage_maps_exposure ;;
   maps-background)  stage_maps_background ;;
   maps-corrected)   stage_maps_corrected ;;
+  cheese)           stage_cheese ;;
+  cheese-detect)    stage_cheese_detect ;;
+  cheese-mask)      stage_cheese_mask ;;
+  stack)            stage_stack ;;
+  stack-events)     stage_stack_events ;;
+  stack-coadd)      stage_stack_coadd ;;
+  stack-merge)      stage_stack_merge ;;
   all)              stage_init; stage_repro; stage_frames; stage_clean
-                    stage_cut;  stage_track; stage_maps ;;
+                    stage_cut;  stage_track; stage_maps
+                    stage_cheese; stage_stack ;;
   qc-init)          stage_qc_init ;;
   qc-repro)         stage_qc_repro ;;
   qc-frames)        stage_qc_frames ;;
@@ -619,7 +808,9 @@ case "$STAGE" in
   qc-cut)           stage_qc_cut ;;
   qc-track)         stage_qc_track ;;
   qc-maps)          stage_qc_maps ;;
+  qc-cheese)        stage_qc_cheese ;;
+  qc-stack)         stage_qc_stack ;;
   qc)               stage_qc_init; stage_qc_repro; stage_qc_frames
                     stage_qc_clean; stage_qc_cut; stage_qc_track
-                    stage_qc_maps ;;
+                    stage_qc_maps; stage_qc_cheese; stage_qc_stack ;;
 esac

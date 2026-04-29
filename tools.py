@@ -26,6 +26,23 @@ Subcommands:
   maps-background MAPSDIR CONFIG              a + b*E fit per frame on off-source pixels.
   maps-corrected MAPSDIR CONFIG               (counts - bkg) / exp_vig per frame.
   qc-maps MAPSDIR FRAMESDIR DETECTORS OUTDIR  Per-(det,band) nobkg-corrected + corrected mosaics.
+  cheese-detect MAPSDIR CUTDIR CHEESEDIR LOGDIR CONFIG [DETECTORS]
+                                              Detect sources via SAS eboxdetect per frame on
+                                              cheese_detection_detectors (default PN); write
+                                              sources.tsv + mask.fits.
+  cheese-mask MAPSDIR CUTDIR CHEESEDIR CONFIG [DETECTORS]
+                                              Apply cheese mask to events + counts/exp/bkg per frame.
+  qc-cheese CHEESEDIR FRAMESDIR DETECTORS OUTDIR
+                                              Per-(det,band) cheesed mosaics with sources circled.
+  stack-events CHEESEDIR TRACK_FITS TRACK_ENV STACKDIR CONFIG [DETECTORS]
+                                              Per-event time-resolved shift to comet co-moving frame.
+  stack-coadd CHEESEDIR STACKDIR TRACK_FITS TRACK_ENV CONFIG [DETECTORS]
+                                              Per-(det,band) stacked counts/exp/bkg/corrected.
+  stack-merge STACKDIR CONFIG [DETECTORS]
+                                              Pure-Python merge of per-detector stacks onto a
+                                              common (union) grid; bilinear resample and sum;
+                                              writes merged_<band>_{counts,exp_vig,bkg,corrected}.
+  qc-stack STACKDIR DETECTORS OUTDIR          Per-(det,band) and merged stacked mosaics.
   build-track FRAMES_MANIFEST TARGET ID_TYPE OBSERVER STEP TRACK_INPUT OUT_FITS OUT_ENV OUT_JSON
                                               Build comet ephemeris over the obs window.
   qc-track TRACK_FITS CUTDIR FRAMESDIR DETECTORS OUTDIR
@@ -44,6 +61,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
+from scipy.ndimage import correlate as _ndi_correlate
 from astropy.io import fits
 from astropy.time import Time, TimeDelta
 from astropy.wcs import WCS
@@ -51,8 +69,8 @@ from astropy.wcs import WCS
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
-from matplotlib.patches import Rectangle
+from matplotlib.colors import LogNorm, Normalize
+from matplotlib.patches import Circle, Rectangle
 
 # PN -> EPN, M1 -> EMOS1, M2 -> EMOS2.  proc_task is the SAS reprocessing
 # task; events_glob matches that detector's ImagingEvts files.
@@ -71,6 +89,51 @@ DETECTOR_ALIASES = {
 
 def die(msg: str) -> None:
     raise SystemExit(msg)
+
+
+# Structural FITS keys astropy regenerates from the data dtype on write —
+# never copy these from a source header verbatim.
+_STRUCT_KEYS = frozenset({"SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2", "EXTEND"})
+
+# Column-WCS prefixes (TCTYP6 etc. on EVENTS) astropy drops when the
+# table data is reassigned; preserved by _write_filtered_events.
+_COL_WCS_PREFIXES = ("TCTYP", "TCRVL", "TCRPX", "TCDLT", "TCUNI")
+
+
+def _resolve_detectors(cfg: dict[str, Any], detectors_arg: str) -> list[str]:
+    """Pick detector list, honouring an optional --detectors override."""
+    return (normalize_detectors(detectors_arg) if detectors_arg.strip()
+            else normalize_detectors(cfg.get("detectors", "PN")))
+
+
+def _image_header(src_header: fits.Header) -> fits.Header:
+    """Copy a FITS header, dropping the structural keys astropy will rewrite."""
+    new = fits.Header()
+    for key in src_header:
+        if key in _STRUCT_KEYS:
+            continue
+        try:
+            new[key] = src_header[key]
+        except (ValueError, KeyError):
+            continue
+    return new
+
+
+def _write_filtered_events(src_path: Path, kept_rows: np.ndarray,
+                           out_path: Path) -> None:
+    """Write src's full HDU structure to out_path with EVENTS data swapped
+    for kept_rows; re-stamp column-WCS keys (TCTYP6 etc.) that astropy
+    drops on data reassignment. Used by both cut and cheese for events."""
+    with fits.open(src_path, memmap=False) as src_hdul:
+        new_hdulist = fits.HDUList([h.copy() for h in src_hdul])
+    evt = next(h for h in new_hdulist if h.name == "EVENTS")
+    col_wcs = {k: evt.header[k] for k in list(evt.header)
+               if any(k.startswith(p) for p in _COL_WCS_PREFIXES)}
+    evt.data = kept_rows
+    for k, v in col_wcs.items():
+        evt.header[k] = v
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    new_hdulist.writeto(out_path, overwrite=True)
 
 
 def _family(detector: str) -> str:
@@ -715,6 +778,19 @@ def _frame_filter(clean_event_path: Path) -> str:
         return str(hdul[0].header.get("FILTER", "")).strip()
 
 
+def _frame_ontime(clean_event_path: Path) -> float:
+    """Read ONTIME from the EVENTS extension; fall back to TSTOP-TSTART."""
+    with fits.open(clean_event_path, memmap=True) as hdul:
+        h = hdul["EVENTS"].header
+        ontime = h.get("ONTIME")
+        if ontime is None:
+            t0, t1 = h.get("TSTART"), h.get("TSTOP")
+            if t0 is not None and t1 is not None:
+                return float(t1) - float(t0)
+            return 0.0
+        return float(ontime)
+
+
 def _emanom_bad_ccds(frame_event_path: Path, log_dir: Path,
                      drop_codes: set[str]) -> tuple[list[int], str]:
     """Run emanom on a MOS frame event list, return (bad_ccd_numbers, ccd_states).
@@ -786,8 +862,8 @@ def cut_run(clean_dir: str, frames_dir: str, out_dir: str, log_dir: str,
     cut_bands  = _cut_bands(cfg)
     sigma_thr  = float(cfg.get("cut_sigma_clip", 5.0))
     drop_codes = set(str(s).upper() for s in cfg.get("cut_emanom_drop", ["B", "O", "U"]))
-    detectors = (normalize_detectors(detectors_arg) if detectors_arg.strip()
-                 else normalize_detectors(cfg.get("detectors", "PN")))
+    min_ontime = float(cfg.get("cut_min_ontime", 0.0))
+    detectors = _resolve_detectors(cfg, detectors_arg)
     clean = Path(clean_dir); frames = Path(frames_dir)
     out = Path(out_dir); log = Path(log_dir)
     (out / "manifest").mkdir(parents=True, exist_ok=True)
@@ -825,6 +901,12 @@ def cut_run(clean_dir: str, frames_dir: str, out_dir: str, log_dir: str,
             if filt.lower() not in _SCIENCE_FILTERS:
                 emanom_rows.append(
                     f"{det}\t{base}\t{filt}\tskipped_non_science\t\t-")
+                continue
+            ontime = _frame_ontime(frame)
+            if ontime < min_ontime:
+                emanom_rows.append(
+                    f"{det}\t{base}\t{filt}\t"
+                    f"skipped_short_ontime[{ontime:.2f}s]\t\t-")
                 continue
             kept_frames.append(frame)
             states = ""
@@ -944,23 +1026,7 @@ def _cut_one_band(det: str, frame_paths: list[Path], band: dict[str, Any],
         n_out += len(kept)
         out_path = events_dir / f"{frame.stem}_{label}_cut.fits"
         out_paths.append(out_path.resolve())
-        # Preserve the source clean file's full HDU structure (PrimaryHDU,
-        # OFFSETS, EXPOSU*, STDGTI*, GTI* etc.) so SAS tasks like evselect
-        # and eexpmap that index by the dataset summary keep working;
-        # only the EVENTS table data gets replaced. We must re-stamp the
-        # column-WCS keys (TCTYP/TCRVL/TCRPX/TCDLT/TCUNI) afterwards
-        # because astropy regenerates the EVENTS column header from the
-        # new data dtype on write and would otherwise drop them.
-        _COL_WCS_PREFIXES = ("TCTYP", "TCRVL", "TCRPX", "TCDLT", "TCUNI")
-        with fits.open(src, memmap=False) as src_hdul:
-            new_hdulist = fits.HDUList([h.copy() for h in src_hdul])
-        evt_hdu = next(h for h in new_hdulist if h.name == "EVENTS")
-        col_wcs = {k: evt_hdu.header[k] for k in list(evt_hdu.header)
-                   if any(k.startswith(p) for p in _COL_WCS_PREFIXES)}
-        evt_hdu.data = kept
-        for k, v in col_wcs.items():
-            evt_hdu.header[k] = v
-        new_hdulist.writeto(out_path, overwrite=True)
+        _write_filtered_events(src, kept, out_path)
 
     manifest = out_dir / "manifest" / f"{det}_{label}_cut.txt"
     manifest.write_text("\n".join(str(p) for p in out_paths) + "\n",
@@ -973,7 +1039,8 @@ def _cut_one_band(det: str, frame_paths: list[Path], band: dict[str, Any],
 def _band_mosaics(events_by_det_band: dict[str, dict[str, list[Path]]],
                   out_dir: Path, *,
                   box_events_by_det: dict[str, list[Path]] | None = None,
-                  track_xy_by_det: dict[str, tuple[np.ndarray, np.ndarray]] | None = None
+                  track_xy_by_det: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
+                  circles: list[tuple[float, float, float]] | None = None,
                   ) -> None:
     """Render one mosaic per (detector, pre-binned band) — no PI re-split.
 
@@ -1006,7 +1073,7 @@ def _band_mosaics(events_by_det_band: dict[str, dict[str, list[Path]]],
                      + ("  +track" if track_xy is not None else ""))
             _save_mosaic(img, extent, boxes,
                          out_dir / f"{det}_{label}_mosaic.png", title,
-                         track_xy=track_xy)
+                         track_xy=track_xy, circles=circles)
             summary.append(f"{det}\t{label}_events={total}")
     (out_dir / "mosaic_summary.txt").write_text(
         "\n".join(summary) + "\n", encoding="utf-8",
@@ -1058,6 +1125,1117 @@ def qc_cut(cut_dir: str, frames_dir: str, detectors_arg: str,
     box_events = {det: _read_manifest(frames / "manifest" / f"{det}_frames.txt")
                   for det in detectors}
     _band_mosaics(events_by_det_band, out, box_events_by_det=box_events)
+
+
+def _coadd_band_maps(maps_dir: Path, detectors: list[str], band: str,
+                     grids: dict[tuple[str, str, str], dict[str, float]]
+                     ) -> tuple[np.ndarray, np.ndarray, float, float, float, int, int]:
+    """Co-add per-frame counts and exp_vig across detectors for one band onto
+    a sky-fixed viewing grid (aligned to the per-frame physical grids' bin).
+
+    Returns (sum_counts, sum_exp, xmin, ymin, bin, nx, ny).
+    """
+    rows = _read_maps_manifest_rows(maps_dir)
+    band_rows = [r for r in rows
+                 if r["band"] == band and r["det"] in detectors
+                 and r["counts"] and r["exp_vig"]]
+    keys = [(r["det"], r["band"], r["base"]) for r in band_rows
+            if (r["det"], r["band"], r["base"]) in grids]
+    if not keys:
+        die(f"cheese: no maps grid info for band={band}; run maps-counts first")
+    bin_phys = grids[keys[0]]["bin"]
+    xmin = min(grids[k]["xmin"] for k in keys)
+    ymin = min(grids[k]["ymin"] for k in keys)
+
+    frame_imgs: list[tuple[dict, np.ndarray, np.ndarray]] = []
+    xmax = ymax = float("-inf")
+    for r in band_rows:
+        key = (r["det"], r["band"], r["base"])
+        if key not in grids:
+            continue
+        g = grids[key]
+        c, _ = _read_first2d(Path(r["counts"]))
+        e, _ = _read_first2d(Path(r["exp_vig"]))
+        fy, fx = c.shape
+        xmax = max(xmax, g["xmin"] + fx * bin_phys)
+        ymax = max(ymax, g["ymin"] + fy * bin_phys)
+        frame_imgs.append((g, c, e))
+    nx = int(round((xmax - xmin) / bin_phys))
+    ny = int(round((ymax - ymin) / bin_phys))
+    sum_c = np.zeros((ny, nx), dtype=float)
+    sum_e = np.zeros((ny, nx), dtype=float)
+    for g, c, e in frame_imgs:
+        ix = int(round((g["xmin"] - xmin) / bin_phys))
+        iy = int(round((g["ymin"] - ymin) / bin_phys))
+        fy, fx = c.shape
+        sum_c[iy:iy+fy, ix:ix+fx] += c
+        sum_e[iy:iy+fy, ix:ix+fx] += e
+    return sum_c, sum_e, xmin, ymin, bin_phys, nx, ny
+
+
+def _read_eboxdetect_sources(srclist_path: Path) -> list[dict[str, float]]:
+    """Read SAS eboxdetect SRCLIST. Returns list of {ra, dec, like, rate, flux}."""
+    if not srclist_path.is_file():
+        return []
+    with fits.open(srclist_path, memmap=False) as hdul:
+        tab = next((h for h in hdul if isinstance(h, fits.BinTableHDU)
+                    and getattr(h, "data", None) is not None
+                    and len(h.data) > 0), None)
+        if tab is None:
+            return []
+        names = {n.upper(): n for n in tab.columns.names}
+        ra_col   = names.get("RA")
+        dec_col  = names.get("DEC")
+        if ra_col is None or dec_col is None:
+            return []
+        like_col = names.get("LIKE") or names.get("ML_RATE")
+        rate_col = names.get("RATE") or names.get("ML_RATE")
+        flux_col = names.get("FLUX")
+        out: list[dict[str, float]] = []
+        for row in tab.data:
+            out.append({
+                "ra":   float(row[ra_col]),
+                "dec":  float(row[dec_col]),
+                "like": float(row[like_col]) if like_col else 0.0,
+                "rate": float(row[rate_col]) if rate_col else 0.0,
+                "flux": float(row[flux_col]) if flux_col else 0.0,
+            })
+        return out
+
+
+def _dedupe_sources(sources: list[dict[str, float]],
+                    radius_arcsec: float) -> list[dict[str, float]]:
+    """Drop sources within radius_arcsec of an earlier (more significant) one."""
+    rad_deg = radius_arcsec / 3600.0
+    kept: list[dict[str, float]] = []
+    for s in sorted(sources, key=lambda r: -r["like"]):
+        cd = math.cos(math.radians(s["dec"]))
+        is_dup = False
+        for k in kept:
+            d_ra  = (s["ra"]  - k["ra"]) * cd
+            d_dec = s["dec"] - k["dec"]
+            if d_ra * d_ra + d_dec * d_dec < rad_deg * rad_deg:
+                is_dup = True
+                break
+        if not is_dup:
+            kept.append(s)
+    return kept
+
+
+def _coadd_for_detection(det_rows: list[dict[str, str]],
+                         grids: dict[tuple[str, str, str], dict[str, float]],
+                         out_counts: Path, out_exp: Path) -> None:
+    """Co-add per-frame counts and exp_vig for one (detector, band) onto a
+    single sky-fixed image with SAS-friendly WCS keys (CRPIX/LTV adjusted
+    for the new grid origin), so eboxdetect can run on the result.
+    """
+    keys = [(r["det"], r["band"], r["base"]) for r in det_rows
+            if (r["det"], r["band"], r["base"]) in grids]
+    bin_phys = grids[keys[0]]["bin"]
+    xmin = min(grids[k]["xmin"] for k in keys)
+    ymin = min(grids[k]["ymin"] for k in keys)
+
+    sample_header: fits.Header | None = None
+    sample_g: dict[str, float] | None = None
+    frame_imgs: list[tuple[dict[str, float], np.ndarray, np.ndarray]] = []
+    xmax = ymax = float("-inf")
+    for r in det_rows:
+        key = (r["det"], r["band"], r["base"])
+        if key not in grids:
+            continue
+        g = grids[key]
+        c, c_hdr = _read_first2d(Path(r["counts"]))
+        e, _ = _read_first2d(Path(r["exp_vig"]))
+        if sample_header is None:
+            sample_header, sample_g = c_hdr, g
+        fy, fx = c.shape
+        xmax = max(xmax, g["xmin"] + fx * bin_phys)
+        ymax = max(ymax, g["ymin"] + fy * bin_phys)
+        frame_imgs.append((g, c, e))
+    nx = int(round((xmax - xmin) / bin_phys))
+    ny = int(round((ymax - ymin) / bin_phys))
+    sum_c = np.zeros((ny, nx), dtype=np.float32)
+    sum_e = np.zeros((ny, nx), dtype=np.float32)
+    for g, c, e in frame_imgs:
+        ix = int(round((g["xmin"] - xmin) / bin_phys))
+        iy = int(round((g["ymin"] - ymin) / bin_phys))
+        fy, fx = c.shape
+        sum_c[iy:iy + fy, ix:ix + fx] += c
+        sum_e[iy:iy + fy, ix:ix + fx] += e
+
+    # WCS for the viewing grid: keep the celestial reference (CRVAL/CDELT/
+    # CTYPE) from the sample frame; recompute CRPIX and LTV for the new
+    # grid origin so SAS image-pixel↔physical-coord conversions stay
+    # consistent.
+    assert sample_header is not None and sample_g is not None
+    sample_crpix1 = float(sample_header["CRPIX1"])
+    sample_crpix2 = float(sample_header["CRPIX2"])
+    refxcrpx = (sample_crpix1 - 0.5) * bin_phys + sample_g["xmin"]
+    refycrpx = (sample_crpix2 - 0.5) * bin_phys + sample_g["ymin"]
+    new_hdr = _image_header(sample_header)
+    new_hdr["CRPIX1"] = (refxcrpx - xmin) / bin_phys + 0.5
+    new_hdr["CRPIX2"] = (refycrpx - ymin) / bin_phys + 0.5
+    new_hdr["LTV1"] = 0.5 - xmin / bin_phys
+    new_hdr["LTV2"] = 0.5 - ymin / bin_phys
+
+    fits.PrimaryHDU(data=sum_c, header=new_hdr.copy()).writeto(out_counts, overwrite=True)
+    fits.PrimaryHDU(data=sum_e, header=new_hdr.copy()).writeto(out_exp,    overwrite=True)
+
+
+def cheese_detect(maps_dir: str, cut_dir: str, cheese_dir: str,
+                  log_dir: str, config_path: str,
+                  detectors_arg: str = "") -> None:
+    """Stage 1: run SAS eboxdetect on every per-frame
+    (counts, exp_vig, bkg) image of each detection-detector (default PN
+    only), union the source lists, and write sources.tsv + sky-fixed
+    mask.fits on the same physical grid as the maps. The mask is then
+    applied to all detectors at stage 2 — PN is the most sensitive
+    detector and dominates source recall.
+    """
+    cfg = load_config(config_path)
+    detection_dets = normalize_detectors(
+        cfg.get("cheese_detection_detectors", ["PN"]))
+    band = str(cfg.get("cheese_band", "hard"))
+    radius_arcsec = float(cfg.get("cheese_radius_arcsec", 25.0))
+    likemin = float(cfg.get("cheese_eboxdetect_likemin", 8))
+    boxsize = int(cfg.get("cheese_eboxdetect_boxsize", 5))
+    nruns   = int(cfg.get("cheese_eboxdetect_nruns", 3))
+
+    cut_bands_cfg = _cut_bands(cfg)
+    band_info = next((b for b in cut_bands_cfg if b["label"] == band), None)
+    if band_info is None:
+        die(f"cheese_band {band!r} is not in cut_bands")
+    pi_min = int(band_info["pi_min"])
+    pi_max = int(band_info["pi_max"])
+
+    maps = Path(maps_dir); cheese = Path(cheese_dir); log = Path(log_dir)
+    cheese.mkdir(parents=True, exist_ok=True)
+    src_dir = cheese / "srclists"; src_dir.mkdir(parents=True, exist_ok=True)
+
+    # Per-frame eboxdetect on each detection detector's hard-band products.
+    rows = _read_maps_manifest_rows(maps)
+    # Per-detector co-added counts/exp_vig (sky-fixed grid, full SAS WCS),
+    # then ONE eboxdetect call per detection-detector. This gives the depth
+    # of the whole observation in a single image so likemin=8 picks out
+    # real sources without per-frame noise contamination.
+    grids = _read_maps_grid(maps)
+    coadd_dir = cheese / "coadd"; coadd_dir.mkdir(parents=True, exist_ok=True)
+    raw_sources: list[dict[str, float]] = []
+    for det in detection_dets:
+        det_rows = [r for r in rows
+                    if r["det"] == det and r["band"] == band
+                    and r["counts"] and r["exp_vig"]]
+        det_rows = [
+            r for r in det_rows
+            if (lambda img: bool((img > 0).any()))(
+                _read_first2d(Path(r["exp_vig"]))[0])
+        ]
+        if not det_rows:
+            continue
+        co_counts = coadd_dir / f"{det}_{band}_counts.fits"
+        co_exp    = coadd_dir / f"{det}_{band}_exp_vig.fits"
+        _coadd_for_detection(det_rows, grids, co_counts, co_exp)
+        srclist = src_dir / f"{det}_{band}_eboxlist.fits"
+        if not srclist.is_file():
+            _run_sas(f"cheese_eboxdetect_{det}_{band}", log, [
+                "eboxdetect",
+                f"imagesets={co_counts}",
+                f"expimagesets={co_exp}",
+                "withexpimage=yes",
+                "usemap=no",
+                f"likemin={likemin}",
+                f"boxsize={boxsize}",
+                f"nruns={nruns}",
+                f"pimin={pi_min}",
+                f"pimax={pi_max}",
+                f"boxlistset={srclist}",
+            ])
+        raw_sources.extend(_read_eboxdetect_sources(srclist))
+
+    # Mask-grid: union of every detector's frame footprints (so we cover
+    # the whole observation, not just the detection-detector's FOV).
+    apply_dets = _resolve_detectors(cfg, detectors_arg)
+    _, _, xmin, ymin, bin_phys, nx, ny = _coadd_band_maps(
+        maps, apply_dets, band, grids)
+
+    sample_counts = next(
+        (Path(r["counts"]) for r in rows
+         if r["counts"] and Path(r["counts"]).is_file()), None,
+    )
+    if sample_counts is None:
+        die("cheese: no maps counts files on disk")
+    with fits.open(sample_counts, memmap=True) as h:
+        sample_header = h[0].header.copy()
+    pixel_arcsec = abs(float(sample_header["CDELT1"])) * 3600.0
+    radius_pix   = radius_arcsec / pixel_arcsec
+    radius_phys  = radius_pix * bin_phys
+
+    # Dedupe by RA/DEC within the mask radius.
+    deduped = _dedupe_sources(raw_sources, radius_arcsec)
+
+    cut_event = next((f for f in Path(cut_dir).rglob("*_cut.fits")
+                      if f.is_file()), None)
+    if cut_event is None:
+        die("cheese: no cut events to anchor RA/DEC -> physical X/Y WCS")
+    wcs = _event_xy_wcs(cut_event)
+
+    yy, xx = np.indices((ny, nx))
+    mask = np.ones((ny, nx), dtype=np.uint8)
+    src_lines = ["det\tx_pix\ty_pix\tx_phys\ty_phys\tra\tdec\t"
+                 "radius_pix\tradius_phys\tlike\trate\tflux"]
+    for s in deduped:
+        x_phys, y_phys = (float(v) for v in
+                          wcs.wcs_world2pix(s["ra"], s["dec"], 1))
+        x_pix = (x_phys - xmin) / bin_phys - 0.5
+        y_pix = (y_phys - ymin) / bin_phys - 0.5
+        if 0 <= x_pix < nx and 0 <= y_pix < ny:
+            mask[(yy - y_pix) ** 2 + (xx - x_pix) ** 2
+                 <= radius_pix * radius_pix] = 0
+        src_lines.append(
+            f"combined\t{int(round(x_pix))}\t{int(round(y_pix))}\t"
+            f"{x_phys:.2f}\t{y_phys:.2f}\t"
+            f"{s['ra']:.6f}\t{s['dec']:.6f}\t"
+            f"{radius_pix:.3f}\t{radius_phys:.2f}\t"
+            f"{s['like']:.2f}\t{s['rate']:.6g}\t{s['flux']:.6g}"
+        )
+    (cheese / "sources.tsv").write_text(
+        "\n".join(src_lines) + "\n", encoding="utf-8")
+
+    mask_hdu = fits.PrimaryHDU(data=mask, header=_image_header(sample_header))
+    mask_hdu.header["MASKXMIN"] = (float(xmin), "physical-X grid origin")
+    mask_hdu.header["MASKYMIN"] = (float(ymin), "physical-Y grid origin")
+    mask_hdu.header["MASKBIN"]  = (float(bin_phys), "physical units per pixel")
+    mask_hdu.header["MASKNX"]   = (int(nx), "image pixels in X")
+    mask_hdu.header["MASKNY"]   = (int(ny), "image pixels in Y")
+    mask_hdu.header["NSOURCES"] = (len(deduped), "number of detected sources")
+    mask_hdu.header["LIKEMIN"]  = (float(likemin), "eboxdetect LIKE threshold")
+    mask_hdu.header["RADPIX"]   = (float(radius_pix), "mask radius in pixels")
+    mask_hdu.writeto(cheese / "mask.fits", overwrite=True)
+
+    n_excl = int((mask == 0).sum())
+    n_total = int(mask.size)
+    (cheese / "cheese_summary.tsv").write_text(
+        "metric\tvalue\n"
+        f"detection_band\t{band}\n"
+        f"detection_detectors\t{','.join(detection_dets)}\n"
+        f"apply_detectors\t{','.join(apply_dets)}\n"
+        f"likemin\t{likemin}\n"
+        f"boxsize\t{boxsize}\n"
+        f"nruns\t{nruns}\n"
+        f"mask_radius_arcsec\t{radius_arcsec}\n"
+        f"mask_radius_pix\t{radius_pix:.3f}\n"
+        f"n_eboxdetect_runs\t{len(detection_dets)}\n"
+        f"n_raw_sources\t{len(raw_sources)}\n"
+        f"n_unique_sources\t{len(deduped)}\n"
+        f"n_excluded_pixels\t{n_excl}\n"
+        f"n_total_pixels\t{n_total}\n"
+        f"excluded_fraction\t{n_excl / n_total:.4f}\n",
+        encoding="utf-8",
+    )
+
+
+def _read_cheese_mask(cheese_dir: Path
+                      ) -> tuple[np.ndarray, float, float, float]:
+    mask_path = cheese_dir / "mask.fits"
+    if not mask_path.is_file():
+        die(f"cheese mask missing: {mask_path}")
+    with fits.open(mask_path, memmap=False) as h:
+        hdr = h[0].header
+        return (np.asarray(h[0].data, dtype=np.uint8),
+                float(hdr["MASKXMIN"]), float(hdr["MASKYMIN"]),
+                float(hdr["MASKBIN"]))
+
+
+def _read_sources(cheese_dir: Path) -> list[tuple[float, float, float]]:
+    p = cheese_dir / "sources.tsv"
+    if not p.is_file():
+        return []
+    lines = p.read_text(encoding="utf-8").splitlines()
+    if len(lines) < 2:
+        return []
+    head = lines[0].split("\t")
+    idx = {n: i for i, n in enumerate(head)}
+    out: list[tuple[float, float, float]] = []
+    for line in lines[1:]:
+        parts = line.split("\t")
+        if len(parts) < len(head):
+            continue
+        out.append((float(parts[idx["x_phys"]]),
+                    float(parts[idx["y_phys"]]),
+                    float(parts[idx["radius_phys"]])))
+    return out
+
+
+def cheese_mask(maps_dir: str, cut_dir: str, cheese_dir: str,
+                config_path: str, detectors_arg: str = "") -> None:
+    """Stage 2 of cheese: drop event rows inside any source circle and
+    zero the corresponding pixels in per-frame counts/exp_vig/bkg images
+    (corrected is recomputed from the masked counts and exp_vig)."""
+    cfg = load_config(config_path)
+    detectors = _resolve_detectors(cfg, detectors_arg)
+    cut_bands = _cut_bands(cfg)
+
+    maps = Path(maps_dir); cut = Path(cut_dir); cheese = Path(cheese_dir)
+    sources = _read_sources(cheese)
+    mask, mx, my, mbin = _read_cheese_mask(cheese)
+
+    summary_rows: list[str] = []
+    for det in detectors:
+        for band in cut_bands:
+            label = str(band["label"])
+            evt_paths = _read_manifest(
+                cut / "manifest" / f"{det}_{label}_cut.txt")
+            n_in = n_kept = n_frames = 0
+            out_paths: list[Path] = []
+            for src_path in evt_paths:
+                if not src_path.is_file():
+                    continue
+                with fits.open(src_path, memmap=True) as h:
+                    data = np.asarray(h["EVENTS"].data)
+                n_in += len(data)
+                if len(data) and sources:
+                    xs = np.asarray(data["X"], dtype=float)
+                    ys = np.asarray(data["Y"], dtype=float)
+                    keep = np.ones(len(data), dtype=bool)
+                    for sx, sy, sr in sources:
+                        keep &= (xs - sx) ** 2 + (ys - sy) ** 2 > sr * sr
+                    kept = data[keep]
+                else:
+                    kept = data
+                n_kept += len(kept)
+                n_frames += 1
+                out_path = (cheese / "events" / det / label
+                            / f"{src_path.stem}_cheesed.fits")
+                _write_filtered_events(src_path, kept, out_path)
+                out_paths.append(out_path.resolve())
+            (cheese / "manifest").mkdir(parents=True, exist_ok=True)
+            (cheese / "manifest" / f"{det}_{label}_cheesed.txt").write_text(
+                "\n".join(str(p) for p in out_paths)
+                + ("\n" if out_paths else ""),
+                encoding="utf-8",
+            )
+            summary_rows.append(
+                f"{det}\t{label}\t{n_in}\t{n_kept}\t{n_in - n_kept}\t{n_frames}"
+            )
+
+    grids = _read_maps_grid(maps)
+    map_summary: list[str] = []
+    for r in _read_maps_manifest_rows(maps):
+        det = r["det"]
+        if det not in detectors:
+            continue
+        if not (r["counts"] and r["exp_vig"] and r["bkg"]):
+            continue
+        key = (det, r["band"], r["base"])
+        if key not in grids:
+            continue
+        g = grids[key]
+        c, c_hdr = _read_first2d(Path(r["counts"]))
+        e, _ = _read_first2d(Path(r["exp_vig"]))
+        b, _ = _read_first2d(Path(r["bkg"]))
+        ix = int(round((g["xmin"] - mx) / mbin))
+        iy = int(round((g["ymin"] - my) / mbin))
+        fy, fx = c.shape
+        slab = mask[iy:iy + fy, ix:ix + fx].astype(float)
+        if slab.shape != c.shape:
+            full = np.ones_like(c)
+            sy = min(slab.shape[0], fy); sx = min(slab.shape[1], fx)
+            full[:sy, :sx] = slab[:sy, :sx]
+            slab = full
+        out_dir = cheese / "maps" / det / r["band"]
+        out_dir.mkdir(parents=True, exist_ok=True)
+        new_hdr = _image_header(c_hdr)
+        new_hdr["CHEESE"] = ("yes", "point-source mask applied")
+        c_out = (c * slab).astype(np.float32)
+        e_out = (e * slab).astype(np.float32)
+        b_out = (b * slab).astype(np.float32)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            corr_out = np.where(e_out > 0, (c_out - b_out) / e_out, 0.0
+                                ).astype(np.float32)
+        for arr, suffix in ((c_out,    "counts"),
+                            (e_out,    "exp_vig"),
+                            (b_out,    "bkg"),
+                            (corr_out, "corrected")):
+            out = out_dir / f"{r['base']}_{r['band']}_{suffix}_cheesed.fits"
+            fits.PrimaryHDU(data=arr, header=new_hdr.copy()).writeto(
+                out, overwrite=True)
+        map_summary.append(
+            f"{det}\t{r['band']}\t{r['base']}\t"
+            f"{out_dir / (r['base'] + '_' + r['band'] + '_counts_cheesed.fits')}\t"
+            f"{out_dir / (r['base'] + '_' + r['band'] + '_exp_vig_cheesed.fits')}\t"
+            f"{out_dir / (r['base'] + '_' + r['band'] + '_bkg_cheesed.fits')}\t"
+            f"{out_dir / (r['base'] + '_' + r['band'] + '_corrected_cheesed.fits')}"
+        )
+
+    _merge_tsv_keep_other(
+        cheese / "events_summary.tsv",
+        "det\tband\tn_in\tn_kept\tn_dropped\tn_frames",
+        (0,), summary_rows, set(detectors))
+    _merge_tsv_keep_other(
+        cheese / "maps_manifest.tsv",
+        "det\tband\tbase\tcounts\texp_vig\tbkg\tcorrected",
+        (0,), map_summary, set(detectors))
+
+
+def qc_cheese(cheese_dir: str, frames_dir: str, detectors_arg: str,
+              out_dir: str) -> None:
+    """Per-(det, band) mosaics of the *cut* events (pre-cheese, so the
+    underlying source structure is visible) with translucent red circles
+    overplotted to show what gets masked out at the cheese stage."""
+    cheese = Path(cheese_dir); frames = Path(frames_dir)
+    out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
+    detectors = normalize_detectors(detectors_arg)
+
+    files = sorted(p for p in cheese.rglob("*") if p.is_file())
+    _write_listing(out / "files.txt", files)
+    for tsv in ("sources.tsv", "cheese_summary.tsv",
+                "events_summary.tsv", "maps_manifest.tsv"):
+        src = cheese / tsv
+        if src.is_file():
+            (out / tsv).write_bytes(src.read_bytes())
+
+    cut_dir = cheese.parent / "cut"
+    events_by_det_band = _cut_events_by_det_band(cut_dir, detectors)
+    box_events = {det: _read_manifest(frames / "manifest" / f"{det}_frames.txt")
+                  for det in detectors}
+    circles = _read_sources(cheese)
+    _band_mosaics(events_by_det_band, out, box_events_by_det=box_events,
+                  circles=circles)
+
+
+# ============================================================
+# Stack stage
+# ============================================================
+
+def _read_track_env(env_path: Path) -> tuple[float, float]:
+    """Parse output/track/track.env for COMET_REF_RA / COMET_REF_DEC."""
+    ra = dec = None
+    for line in Path(env_path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("export COMET_REF_RA="):
+            ra = float(line.split("=", 1)[1].strip().strip('"'))
+        elif line.startswith("export COMET_REF_DEC="):
+            dec = float(line.split("=", 1)[1].strip().strip('"'))
+    if ra is None or dec is None:
+        die(f"track env missing COMET_REF_RA / COMET_REF_DEC: {env_path}")
+    return ra, dec
+
+
+def _xmm_seconds_to_mjd_utc(seconds: np.ndarray, mjdref: float,
+                            timesys: str) -> np.ndarray:
+    """Convert XMM mission-elapsed-time TIME (in TIMESYS scale) to MJD UTC."""
+    t = (Time(mjdref, format="mjd", scale=timesys.lower())
+         + TimeDelta(np.asarray(seconds, dtype=float), format="sec"))
+    return np.asarray(t.utc.mjd, dtype=float)
+
+
+def _interpolate_track(mjd_target: np.ndarray, mjd_track: np.ndarray,
+                       ra_track: np.ndarray, dec_track: np.ndarray
+                       ) -> tuple[np.ndarray, np.ndarray]:
+    """Interpolate track RA/DEC at the requested MJDs. Track must be sorted
+    ascending; RA is unwrapped before interp to handle 0/360 boundary."""
+    ra_unwrapped = np.unwrap(np.deg2rad(ra_track))
+    ra_at_t  = np.rad2deg(np.interp(mjd_target, mjd_track, ra_unwrapped)) % 360.0
+    dec_at_t = np.interp(mjd_target, mjd_track, dec_track)
+    return ra_at_t, dec_at_t
+
+
+def _shift_events(src_path: Path, dst_path: Path,
+                  mjd_track: np.ndarray, ra_track: np.ndarray,
+                  dec_track: np.ndarray, ref_ra: float, ref_dec: float,
+                  wcs: WCS) -> tuple[int, float, float]:
+    """Apply a per-event time-resolved shift so the comet stays at the
+    track's reference RA/DEC. Returns (n_events, mid_dx_phys, mid_dy_phys).
+    """
+    with fits.open(src_path, memmap=True) as h:
+        evt_hdr = h["EVENTS"].header
+        data = np.asarray(h["EVENTS"].data)
+        mjdref = float(evt_hdr.get("MJDREF",
+                       float(evt_hdr.get("MJDREFI", 0))
+                       + float(evt_hdr.get("MJDREFF", 0))))
+        timesys = str(evt_hdr.get("TIMESYS", "TT")).strip().upper()
+    n = len(data)
+    if n == 0:
+        _write_filtered_events(src_path, data, dst_path)
+        return 0, 0.0, 0.0
+
+    times = np.asarray(data["TIME"], dtype=float)
+    mjd_utc = _xmm_seconds_to_mjd_utc(times, mjdref, timesys)
+    ra_t, dec_t = _interpolate_track(mjd_utc, mjd_track, ra_track, dec_track)
+    x_c, y_c = wcs.wcs_world2pix(ra_t, dec_t, 1)
+    x_ref, y_ref = (float(v) for v in wcs.wcs_world2pix(ref_ra, ref_dec, 1))
+
+    new_data = data.copy()
+    new_data["X"] = data["X"] - x_c + x_ref
+    new_data["Y"] = data["Y"] - y_c + y_ref
+    _write_filtered_events(src_path, new_data, dst_path)
+
+    # Mid-window shift used by the per-frame map shift in stack-coadd.
+    mid_idx = n // 2
+    return n, float(x_c[mid_idx] - x_ref), float(y_c[mid_idx] - y_ref)
+
+
+def stack_events(cheese_dir: str, track_fits: str, track_env: str,
+                 stack_dir: str, config_path: str,
+                 detectors_arg: str = "") -> None:
+    """For each cheesed cut event file, shift X/Y per event so the comet
+    stays at the track reference RA/DEC. Output goes to
+    stack/events/<DET>/<BAND>/<frame>_<band>_stack.fits with the original
+    HDU structure preserved.
+    """
+    cfg = load_config(config_path)
+    cut_bands = _cut_bands(cfg)
+    detectors = _resolve_detectors(cfg, detectors_arg)
+
+    cheese = Path(cheese_dir); stack = Path(stack_dir)
+    stack.mkdir(parents=True, exist_ok=True)
+    (stack / "events").mkdir(parents=True, exist_ok=True)
+    (stack / "manifest").mkdir(parents=True, exist_ok=True)
+
+    mjd_track, ra_track, dec_track, _ = _read_track(track_fits)
+    ref_ra, ref_dec = _read_track_env(Path(track_env))
+
+    sample_event = next(
+        (p for det in detectors for label in (b["label"] for b in cut_bands)
+         for p in _read_manifest(cheese / "manifest"
+                                 / f"{det}_{label}_cheesed.txt")
+         if p.is_file()),
+        None,
+    )
+    if sample_event is None:
+        die("stack-events: no cheesed events on disk; run cheese first")
+    wcs = _event_xy_wcs(sample_event)
+
+    summary_rows = ["det\tband\tn_events\tn_frames\tmid_dx_phys\tmid_dy_phys"]
+    for det in detectors:
+        for band in cut_bands:
+            label = str(band["label"])
+            srcs = _read_manifest(
+                cheese / "manifest" / f"{det}_{label}_cheesed.txt")
+            out_dir = stack / "events" / det / label
+            out_dir.mkdir(parents=True, exist_ok=True)
+            paths: list[Path] = []
+            tot_events = 0
+            sum_dx = sum_dy = 0.0
+            for src_path in srcs:
+                if not src_path.is_file():
+                    continue
+                base = src_path.stem
+                if base.endswith("_cheesed"):
+                    base = base[: -len("_cheesed")]
+                if base.endswith(f"_{label}_cut"):
+                    base = base[: -len(f"_{label}_cut")]
+                dst = out_dir / f"{base}_{label}_stack.fits"
+                n, dx, dy = _shift_events(src_path, dst,
+                                          mjd_track, ra_track, dec_track,
+                                          ref_ra, ref_dec, wcs)
+                paths.append(dst.resolve())
+                tot_events += n
+                sum_dx += dx; sum_dy += dy
+            (stack / "manifest" / f"{det}_{label}_stack.txt").write_text(
+                "\n".join(str(p) for p in paths)
+                + ("\n" if paths else ""), encoding="utf-8",
+            )
+            n_frames = len(paths)
+            summary_rows.append(
+                f"{det}\t{label}\t{tot_events}\t{n_frames}\t"
+                f"{(sum_dx / max(n_frames, 1)):.2f}\t"
+                f"{(sum_dy / max(n_frames, 1)):.2f}"
+            )
+    _merge_tsv_keep_other(
+        stack / "events_summary.tsv",
+        "det\tband\tn_events\tn_frames\tmid_dx_phys\tmid_dy_phys",
+        (0,), summary_rows[1:], set(detectors),
+    )
+
+
+def _stack_grid_extent(per_frame_offsets: list[tuple[dict[str, float], float, float]],
+                       bin_phys: float
+                       ) -> tuple[float, float, int, int]:
+    """Given a list of (frame-grid-dict, dx_phys, dy_phys) offsets to apply
+    in the stack frame, return (xmin, ymin, nx, ny) of the union extent."""
+    xmin = min(g["xmin"] - dx for g, dx, _ in per_frame_offsets)
+    ymin = min(g["ymin"] - dy for g, _, dy in per_frame_offsets)
+    xmax = max(g["xmin"] - dx + g["nx"] * bin_phys
+               for g, dx, _ in per_frame_offsets)
+    ymax = max(g["ymin"] - dy + g["ny"] * bin_phys
+               for g, _, dy in per_frame_offsets)
+    nx = int(round((xmax - xmin) / bin_phys))
+    ny = int(round((ymax - ymin) / bin_phys))
+    return xmin, ymin, nx, ny
+
+
+def _frame_midtime_mjd_utc(event_path: Path) -> float:
+    """Return the MJD UTC at the midpoint of an event file's [TSTART, TSTOP]."""
+    with fits.open(event_path, memmap=True) as h:
+        hdr = h["EVENTS"].header
+        tstart = float(hdr["TSTART"])
+        tstop = float(hdr["TSTOP"])
+        mjdref = float(hdr.get("MJDREF",
+                               float(hdr.get("MJDREFI", 0))
+                               + float(hdr.get("MJDREFF", 0))))
+        timesys = str(hdr.get("TIMESYS", "TT")).strip().upper()
+    return float(_xmm_seconds_to_mjd_utc(
+        np.array([0.5 * (tstart + tstop)]), mjdref, timesys)[0])
+
+
+def _trail_kernel(evt_path: Path, mid_mjd: float,
+                  mjd_track: np.ndarray, ra_track: np.ndarray,
+                  dec_track: np.ndarray, wcs: WCS, bin_phys: float,
+                  step_sec: float = 30.0
+                  ) -> np.ndarray:
+    """Time-weighted distribution of the comet's pixel-offset relative to the
+    frame midtime, in stack-grid pixels (one pixel = bin_phys phys-px).
+    Sums to 1, odd shape, centered. Sampled across the union of STDGTI*
+    intervals so GTI gaps within the frame get zero weight."""
+    with fits.open(evt_path, memmap=True) as h:
+        evt_hdr = h["EVENTS"].header
+        mjdref = float(evt_hdr.get("MJDREF",
+                       float(evt_hdr.get("MJDREFI", 0))
+                       + float(evt_hdr.get("MJDREFF", 0))))
+        timesys = str(evt_hdr.get("TIMESYS", "TT")).strip().upper()
+        ivs: list[tuple[float, float]] = []
+        for hdu in h[1:]:
+            name = (hdu.name or "").upper()
+            if name.startswith("STDGTI") and hdu.data is not None:
+                for s, e in zip(hdu.data["START"], hdu.data["STOP"]):
+                    if e > s:
+                        ivs.append((float(s), float(e)))
+    if not ivs:
+        return np.array([[1.0]], dtype=np.float32)
+
+    samples = []
+    for s0, s1 in ivs:
+        n = max(2, int(np.ceil((s1 - s0) / step_sec)))
+        samples.append(np.linspace(s0, s1, n))
+    times = np.concatenate(samples)
+    mjd_utc = _xmm_seconds_to_mjd_utc(times, mjdref, timesys)
+    ra_t, dec_t = _interpolate_track(mjd_utc, mjd_track, ra_track, dec_track)
+    x_t, y_t = wcs.wcs_world2pix(ra_t, dec_t, 1)
+
+    ra_m, dec_m = _interpolate_track(np.array([mid_mjd]),
+                                     mjd_track, ra_track, dec_track)
+    x_m, y_m = (float(v) for v in wcs.wcs_world2pix(ra_m[0], dec_m[0], 1))
+
+    dx = (np.asarray(x_t, dtype=float) - x_m) / bin_phys
+    dy = (np.asarray(y_t, dtype=float) - y_m) / bin_phys
+    half_x = int(np.ceil(max(abs(float(dx.min())),
+                             abs(float(dx.max())))))
+    half_y = int(np.ceil(max(abs(float(dy.min())),
+                             abs(float(dy.max())))))
+    nx_k, ny_k = 2 * half_x + 1, 2 * half_y + 1
+    kernel, _, _ = np.histogram2d(
+        dx, dy, bins=(nx_k, ny_k),
+        range=((-half_x - 0.5, half_x + 0.5),
+               (-half_y - 0.5, half_y + 0.5)))
+    kernel = kernel.T  # (ny, nx)
+    s = float(kernel.sum())
+    if s <= 0:
+        return np.array([[1.0]], dtype=np.float32)
+    return (kernel / s).astype(np.float32)
+
+
+def stack_coadd(cheese_dir: str, stack_dir: str, track_fits: str,
+                track_env: str, config_path: str,
+                detectors_arg: str = "") -> None:
+    """Build the per-(det, band) stacked counts/exp_vig/bkg/corrected maps
+    in the comet co-moving frame.
+
+    counts come from the per-event-shifted events written by stack-events
+    (binned via histogram2d). exp_vig and bkg come from the cheesed maps
+    integer-pixel-shifted by the comet position at each frame's midtime
+    (good enough at 4 arcsec/pix; comet drifts ~1 pixel per frame).
+    """
+    cfg = load_config(config_path)
+    cut_bands = _cut_bands(cfg)
+    detectors = _resolve_detectors(cfg, detectors_arg)
+    quantile = float(cfg.get("exp_floor_quantile", 0.01))
+
+    cheese = Path(cheese_dir); stack = Path(stack_dir)
+    grids = _read_maps_grid(cheese.parent / "maps")
+
+    mjd_track, ra_track, dec_track, _ = _read_track(track_fits)
+    ref_ra, ref_dec = _read_track_env(Path(track_env))
+
+    sample_event = next(
+        (p for det in detectors for label in (b["label"] for b in cut_bands)
+         for p in _read_manifest(stack / "manifest"
+                                 / f"{det}_{label}_stack.txt")
+         if p.is_file()),
+        None,
+    )
+    if sample_event is None:
+        die("stack-coadd: no shifted events; run stack-events first")
+    wcs = _event_xy_wcs(sample_event)
+    x_ref, y_ref = (float(v) for v in wcs.wcs_world2pix(ref_ra, ref_dec, 1))
+
+    summary = ["det\tband\tnx\tny\tn_events\ttotal_exposure\tbkg_total"]
+    for det in detectors:
+        for band in cut_bands:
+            label = str(band["label"])
+            stack_paths = _read_manifest(
+                stack / "manifest" / f"{det}_{label}_stack.txt")
+            stack_paths = [p for p in stack_paths if p.is_file()]
+            if not stack_paths:
+                continue
+
+            # Per-frame mid-time shift (for the maps integer shift AND to
+            # size the stack grid via the shifted footprints) plus a
+            # within-frame trail kernel (for smearing exp_vig/bkg along the
+            # comet path so they match the events' per-event-shift geometry).
+            offsets: list[tuple[dict[str, float], float, float, Path,
+                                np.ndarray]] = []
+            max_kx = max_ky = 0
+            for evt_path in stack_paths:
+                base = evt_path.stem.removesuffix(f"_{label}_stack")
+                key = (det, label, base)
+                if key not in grids:
+                    continue
+                mid_mjd = _frame_midtime_mjd_utc(evt_path)
+                ra_m, dec_m = _interpolate_track(np.array([mid_mjd]),
+                                                 mjd_track, ra_track,
+                                                 dec_track)
+                xc, yc = (float(v) for v in
+                          wcs.wcs_world2pix(ra_m[0], dec_m[0], 1))
+                kernel = _trail_kernel(evt_path, mid_mjd, mjd_track,
+                                       ra_track, dec_track, wcs,
+                                       grids[key]["bin"])
+                max_kx = max(max_kx, (kernel.shape[1] - 1) // 2)
+                max_ky = max(max_ky, (kernel.shape[0] - 1) // 2)
+                offsets.append((grids[key], xc - x_ref, yc - y_ref,
+                                evt_path, kernel))
+            if not offsets:
+                continue
+
+            bin_phys = offsets[0][0]["bin"]
+            xmin, ymin, nx, ny = _stack_grid_extent(
+                [(g, dx, dy) for g, dx, dy, _, _ in offsets], bin_phys)
+            xmin -= max_kx * bin_phys
+            ymin -= max_ky * bin_phys
+            nx += 2 * max_kx
+            ny += 2 * max_ky
+
+            sum_c = np.zeros((ny, nx), dtype=np.float32)
+            sum_e = np.zeros((ny, nx), dtype=np.float32)
+            sum_b = np.zeros((ny, nx), dtype=np.float32)
+            cheese_maps = cheese / "maps" / det / label
+            n_events_total = 0
+
+            for g, dx, dy, evt_path, kernel in offsets:
+                ix = int(round((g["xmin"] - dx - xmin) / bin_phys))
+                iy = int(round((g["ymin"] - dy - ymin) / bin_phys))
+
+                with fits.open(evt_path, memmap=True) as h:
+                    data = np.asarray(h["EVENTS"].data)
+                if len(data):
+                    xs = np.asarray(data["X"], dtype=float)
+                    ys = np.asarray(data["Y"], dtype=float)
+                    good = (np.isfinite(xs) & np.isfinite(ys)
+                            & (np.abs(xs) < 1e7) & (np.abs(ys) < 1e7))
+                    h2, _xe, _ye = np.histogram2d(
+                        xs[good], ys[good], bins=(nx, ny),
+                        range=((xmin, xmin + nx * bin_phys),
+                               (ymin, ymin + ny * bin_phys)),
+                    )
+                    sum_c += h2.T.astype(np.float32)
+                    n_events_total += int(good.sum())
+
+                # Smear exp_vig/bkg along the within-frame comet path so
+                # chip gaps and cheese disks match the events' geometry.
+                kh, kw = kernel.shape
+                py, px = (kh - 1) // 2, (kw - 1) // 2
+
+                base = evt_path.stem.removesuffix(f"_{label}_stack")
+                exp_path = cheese_maps / f"{base}_{label}_exp_vig_cheesed.fits"
+                bkg_path = cheese_maps / f"{base}_{label}_bkg_cheesed.fits"
+                # evselect rounds nx/ny slightly differently from a naive
+                # (xmax-xmin)/bin, so clip the slab to the actual image
+                # shape and to the stack-grid bounds.
+                for arr_in, accum in ((exp_path, sum_e), (bkg_path, sum_b)):
+                    if not arr_in.is_file():
+                        continue
+                    img, _ = _read_first2d(arr_in)
+                    if kh > 1 or kw > 1:
+                        img = _ndi_correlate(
+                            np.pad(img.astype(np.float32),
+                                   ((py, py), (px, px)),
+                                   mode="constant", constant_values=0.0),
+                            kernel, mode="constant", cval=0.0)
+                        ix_eff, iy_eff = ix - px, iy - py
+                    else:
+                        img = img.astype(np.float32)
+                        ix_eff, iy_eff = ix, iy
+                    fy, fx = img.shape
+                    sx0, sy0 = max(0, ix_eff), max(0, iy_eff)
+                    sx1 = min(nx, ix_eff + fx); sy1 = min(ny, iy_eff + fy)
+                    if sx1 <= sx0 or sy1 <= sy0:
+                        continue
+                    accum[sy0:sy1, sx0:sx1] += img[
+                        sy0 - iy_eff : sy0 - iy_eff + (sy1 - sy0),
+                        sx0 - ix_eff : sx0 - ix_eff + (sx1 - sx0),
+                    ].astype(np.float32)
+
+            corrected = _safe_rate(sum_c - sum_b, sum_e, quantile)
+
+            # Sample header from the first frame's counts to inherit
+            # celestial WCS keys (CRVAL/CDELT/CTYPE) — those are universal,
+            # only CRPIX/LTV need to shift to the stack grid origin.
+            first_g, _, _, first_evt, _ = offsets[0]
+            first_base = first_evt.stem.removesuffix(f"_{label}_stack")
+            sample_counts = (cheese.parent / "maps" / det / label
+                             / f"{first_base}_{label}_counts.fits")
+            with fits.open(sample_counts, memmap=True) as h:
+                sample_header = h[0].header.copy()
+            new_hdr = _image_header(sample_header)
+            refxcrpx = (float(sample_header["CRPIX1"]) - 0.5) * bin_phys + first_g["xmin"]
+            refycrpx = (float(sample_header["CRPIX2"]) - 0.5) * bin_phys + first_g["ymin"]
+            new_hdr["CRPIX1"] = (refxcrpx - xmin) / bin_phys + 0.5
+            new_hdr["CRPIX2"] = (refycrpx - ymin) / bin_phys + 0.5
+            new_hdr["LTV1"] = 0.5 - xmin / bin_phys
+            new_hdr["LTV2"] = 0.5 - ymin / bin_phys
+            new_hdr["STACKREF_RA"]  = (ref_ra,  "comet reference RA [deg]")
+            new_hdr["STACKREF_DEC"] = (ref_dec, "comet reference DEC [deg]")
+
+            for arr, name in ((sum_c,    "counts"),
+                              (sum_e,    "exp_vig"),
+                              (sum_b,    "bkg"),
+                              (corrected, "corrected")):
+                out = stack / f"{det}_{label}_{name}.fits"
+                fits.PrimaryHDU(data=arr, header=new_hdr.copy()).writeto(
+                    out, overwrite=True)
+
+            summary.append(
+                f"{det}\t{label}\t{nx}\t{ny}\t{n_events_total}\t"
+                f"{float(sum_e.sum()):.6g}\t{float(sum_b.sum()):.6g}"
+            )
+
+    _merge_tsv_keep_other(
+        stack / "stack_summary.tsv",
+        "det\tband\tnx\tny\tn_events\ttotal_exposure\tbkg_total",
+        (0,), summary[1:], set(detectors),
+    )
+
+
+def stack_merge(stack_dir: str, config_path: str,
+                detectors_arg: str = "") -> None:
+    """Pure-Python merge of per-detector stacks: a common grid is built as
+    the union of per-detector footprints (all share CRVAL/CDELT, so the
+    pixel offset between stacks is just CRPIX_d - CRPIX_ref); each
+    detector's counts/exp_vig/bkg is bilinearly resampled onto that grid
+    and summed. exp_vig is pre-multiplied per detector by its relative
+    effective area (cfg.stack_merge_weights, default {PN:1.0, M1:0.4,
+    M2:0.4} matching eimagecombine) so the resulting rate map is in
+    PN-equivalent count rate, uniform across PN chip gaps where MOS
+    covers."""
+    from math import ceil, floor
+    from scipy.ndimage import map_coordinates
+    cfg = load_config(config_path)
+    cut_bands = _cut_bands(cfg)
+    detectors = _resolve_detectors(cfg, detectors_arg)
+    weights = {str(k).upper(): float(v) for k, v in
+               cfg.get("stack_merge_weights",
+                       {"PN": 1.0, "M1": 0.4, "M2": 0.4}).items()}
+    quantile = float(cfg.get("exp_floor_quantile", 0.01))
+    stack = Path(stack_dir)
+
+    summary = ["band\ttype\tn_pixels_positive\ttotal\tmin\tmax"]
+    for band in cut_bands:
+        label = str(band["label"])
+        per_det = []
+        for d in detectors:
+            cp = stack / f"{d}_{label}_counts.fits"
+            ep = stack / f"{d}_{label}_exp_vig.fits"
+            bp = stack / f"{d}_{label}_bkg.fits"
+            if not all(p.is_file() for p in (cp, ep, bp)):
+                continue
+            with fits.open(cp) as h:
+                hdr = h[0].header.copy()
+                shape = h[0].data.shape
+            per_det.append({"det": d, "hdr": hdr, "shape": shape,
+                            "paths": (cp, ep, bp)})
+        if not per_det:
+            continue
+
+        # Reference = first detector's grid; the offset between any other
+        # detector's grid and this is CRPIX_d - CRPIX_ref (real-valued, so
+        # use bilinear interp on the slab).
+        ref_hdr = per_det[0]["hdr"]
+        rcx, rcy = float(ref_hdr["CRPIX1"]), float(ref_hdr["CRPIX2"])
+        x_lo = y_lo = float("inf"); x_hi = y_hi = float("-inf")
+        for d in per_det:
+            cx = float(d["hdr"]["CRPIX1"]); cy = float(d["hdr"]["CRPIX2"])
+            ny_d, nx_d = d["shape"]
+            sx, sy = rcx - cx, rcy - cy
+            d["shift"] = (sx, sy)
+            x_lo = min(x_lo, 1 + sx); x_hi = max(x_hi, nx_d + sx)
+            y_lo = min(y_lo, 1 + sy); y_hi = max(y_hi, ny_d + sy)
+
+        x0 = floor(x_lo); y0 = floor(y_lo)
+        nx = int(ceil(x_hi) - x0) + 1
+        ny = int(ceil(y_hi) - y0) + 1
+
+        sum_c = np.zeros((ny, nx), dtype=np.float32)
+        sum_e = np.zeros((ny, nx), dtype=np.float32)
+        sum_b = np.zeros((ny, nx), dtype=np.float32)
+        i_grid, j_grid = np.indices((ny, nx))
+
+        for d in per_det:
+            sx, sy = d["shift"]
+            w = float(weights.get(d["det"].upper(), 1.0))
+            # Common pixel (j+1, i+1) (1-indexed) maps to ref pixel
+            # (j+1+x0-1, i+1+y0-1) = (j+x0, i+y0). Detector d's pixel for
+            # the same celestial position is shifted back by (sx, sy):
+            #   d_pix_1based = (j+x0-sx, i+y0-sy)
+            # 0-indexed coords for map_coordinates:
+            j_in_d = j_grid + x0 - sx - 1.0
+            i_in_d = i_grid + y0 - sy - 1.0
+            # Counts and bkg unweighted; exp_vig pre-multiplied by w_d so
+            # the merged rate is PN-equivalent (eimagecombine recipe).
+            scales = (1.0, w, 1.0)
+            for path, accum, scale in zip(d["paths"],
+                                          (sum_c, sum_e, sum_b), scales):
+                with fits.open(path) as h:
+                    arr = h[0].data.astype(np.float32)
+                if scale != 1.0:
+                    arr = arr * np.float32(scale)
+                accum += map_coordinates(
+                    arr, [i_in_d, j_in_d], order=1,
+                    mode="constant", cval=0.0).astype(np.float32)
+
+        corr = _safe_rate(sum_c - sum_b, sum_e, quantile)
+
+        new_hdr = ref_hdr.copy()
+        new_hdr["CRPIX1"] = rcx - x0 + 1
+        new_hdr["CRPIX2"] = rcy - y0 + 1
+        for k in ("LTV1", "LTV2"):
+            if k in new_hdr:
+                del new_hdr[k]
+
+        for arr, name in ((sum_c, "counts"), (sum_e, "exp_vig"),
+                          (sum_b, "bkg"), (corr, "corrected")):
+            out = stack / f"merged_{label}_{name}.fits"
+            fits.PrimaryHDU(data=arr, header=new_hdr.copy()).writeto(
+                out, overwrite=True)
+            pos = arr[arr > 0]
+            summary.append(
+                f"{label}\t{name}\t{int(pos.size)}\t{float(arr.sum()):.6g}\t"
+                f"{float(pos.min()) if pos.size else 0:.6g}\t"
+                f"{float(pos.max()) if pos.size else 0:.6g}"
+            )
+
+    (stack / "stack_merge_summary.tsv").write_text(
+        "\n".join(summary) + "\n", encoding="utf-8")
+
+
+def qc_stack(stack_dir: str, detectors_arg: str, out_dir: str,
+             config_path: str = "") -> None:
+    """Per-(det, band) stacked-frame mosaics of counts, exp_vig, bkg, and
+    corrected, plus the merged products if present. No frame boxes
+    (stacked products lose per-frame structure) and no comet overlay
+    (comet sits at the reference by construction).
+
+    Corrected maps are rendered with a 0-centered linear `vanimo`
+    diverging colormap; a Gaussian-smoothed companion is also written for
+    each detector + the merged image."""
+    from scipy.ndimage import gaussian_filter
+    stack = Path(stack_dir)
+    out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
+    detectors = normalize_detectors(detectors_arg)
+
+    sigma_px = 10.0
+    if config_path:
+        try:
+            sigma_px = float(load_config(config_path).get(
+                "qc_stack_smooth_sigma_px", 10.0))
+        except Exception:
+            pass
+
+    files = sorted(p for p in stack.rglob("*") if p.is_file()
+                   if "/tmp/" not in str(p))
+    _write_listing(out / "files.txt", files)
+    for tsv in ("events_summary.tsv", "stack_summary.tsv",
+                "stack_merge_summary.tsv"):
+        src = stack / tsv
+        if src.is_file():
+            (out / tsv).write_bytes(src.read_bytes())
+
+    # "merged" is treated as a virtual detector if outputs exist.
+    det_tags = list(detectors)
+    if any((stack / f"merged_{b}_counts.fits").is_file()
+           for b in ("soft", "hard")):
+        det_tags.append("merged")
+
+    def _div_norm(arr: np.ndarray) -> tuple[Normalize, float]:
+        """0-centered linear norm with extent = max(|p1|, |p99|).
+        Computed on the supplied (unsmoothed) array so both the regular
+        and smoothed mosaics share the same color range."""
+        finite = arr[np.isfinite(arr)]
+        if finite.size:
+            p1 = float(np.percentile(finite, 1))
+            p99 = float(np.percentile(finite, 99))
+            v = max(abs(p1), abs(p99))
+        else:
+            v = 0.0
+        if v == 0.0:
+            v = 1e-6
+        return Normalize(vmin=-v, vmax=v), v
+
+    summary = ["det\tband\ttype\tn_pixels_positive\tmin\tmax"]
+    for det in det_tags:
+        for band in ("soft", "hard"):
+            for tag in ("counts", "exp_vig", "bkg", "corrected"):
+                p = stack / f"{det}_{band}_{tag}.fits"
+                if not p.is_file():
+                    continue
+                img, hdr = _read_first2d(p)
+                ny, nx = img.shape
+                extent = (0.0, float(nx), 0.0, float(ny))
+
+                if tag == "corrected":
+                    norm, v = _div_norm(img)
+                    title = (f"{det}  {band}  corrected [stacked]  "
+                             f"{nx}x{ny}  ±{v:.3g}")
+                    _save_mosaic(img, extent, [],
+                                 out / f"{det}_{band}_corrected_mosaic.png",
+                                 title, norm=norm, cmap="vanimo",
+                                 colorbar_label="rate")
+                    img_s = gaussian_filter(img.astype(np.float32),
+                                            sigma=sigma_px).astype(np.float32)
+                    title_s = (f"{det}  {band}  corrected smoothed "
+                               f"σ={sigma_px:g}px [stacked]  "
+                               f"{nx}x{ny}  ±{v:.3g}")
+                    _save_mosaic(
+                        img_s, extent, [],
+                        out / f"{det}_{band}_corrected_smoothed_mosaic.png",
+                        title_s, norm=norm, cmap="vanimo",
+                        colorbar_label="rate")
+                    fits.PrimaryHDU(data=img_s, header=hdr.copy()).writeto(
+                        out / f"{det}_{band}_corrected_smoothed.fits",
+                        overwrite=True)
+                    summary.append(
+                        f"{det}\t{band}\tcorrected\t-\t"
+                        f"{float(img.min()):.6g}\t{float(img.max()):.6g}")
+                else:
+                    positive = img[img > 0]
+                    vmin = (float(np.percentile(positive, 5))
+                            if positive.size else 1e-6)
+                    vmax = (float(np.percentile(positive, 99.5))
+                            if positive.size else 1.0)
+                    if not (vmax > vmin > 0):
+                        vmax = max(vmax, vmin * 10.0, 1e-6)
+                    title = (f"{det}  {band}  {tag} [stacked]  "
+                             f"{nx}x{ny}  "
+                             f"{int(positive.size)} positive px")
+                    _save_mosaic(img, extent, [],
+                                 out / f"{det}_{band}_{tag}_mosaic.png",
+                                 title, vmin=vmin, vmax=vmax)
+                    summary.append(
+                        f"{det}\t{band}\t{tag}\t{positive.size}\t"
+                        f"{float(positive.min()) if positive.size else 0:.6g}\t"
+                        f"{float(positive.max()) if positive.size else 0:.6g}"
+                    )
+    (out / "qc_summary.tsv").write_text("\n".join(summary) + "\n",
+                                         encoding="utf-8")
 
 
 def _run_sas(tag: str, log_dir: Path, cmd: list[str]) -> None:
@@ -1114,8 +2292,7 @@ def maps_counts(cut_dir: str, maps_dir: str, log_dir: str,
     """Bin each cut event list into a counts image on a per-frame grid."""
     cfg = load_config(config_path)
     cut_bands = _cut_bands(cfg)
-    detectors = (normalize_detectors(detectors_arg) if detectors_arg.strip()
-                 else normalize_detectors(cfg.get("detectors", "PN")))
+    detectors = _resolve_detectors(cfg, detectors_arg)
     bin_arcsec = float(cfg.get("map_bin_arcsec", 4.0))
     pad_pix = int(cfg.get("map_pad_pix", 1))
 
@@ -1170,8 +2347,7 @@ def maps_exposure(cut_dir: str, maps_dir: str, atthk_path: str,
     """Build per-frame vignetted exposure maps via eexpmap."""
     cfg = load_config(config_path)
     cut_bands = _cut_bands(cfg)
-    detectors = (normalize_detectors(detectors_arg) if detectors_arg.strip()
-                 else normalize_detectors(cfg.get("detectors", "PN")))
+    detectors = _resolve_detectors(cfg, detectors_arg)
     attrebin = str(cfg.get("map_eexpmap_attrebin", "0.020626481"))
 
     cut = Path(cut_dir); maps = Path(maps_dir); log = Path(log_dir)
@@ -1255,16 +2431,19 @@ def maps_background(maps_dir: str, config_path: str,
     """Per-frame a + b·E background fit on off-source sample pixels."""
     cfg = load_config(config_path)
     cut_bands = _cut_bands(cfg)
-    detectors = (normalize_detectors(detectors_arg) if detectors_arg.strip()
-                 else normalize_detectors(cfg.get("detectors", "PN")))
+    detectors = _resolve_detectors(cfg, detectors_arg)
     mode = str(cfg.get("map_bkg_constrain", "flat")).strip().lower()
     if mode not in {"none", "nonneg", "flat"}:
         die(f"map_bkg_constrain must be none/nonneg/flat (got {mode!r})")
     outside_frac = float(cfg.get("map_bkg_outside_radius_fraction", 0.5))
+    scale_cfg = cfg.get("map_bkg_scale", 1.0)
+    sigma_clip = float(cfg.get("map_bkg_sigma_clip", 5.0))
+    floor_q = float(cfg.get("exp_floor_quantile", 0.05))
+    taper_q = float(cfg.get("map_bkg_taper_quantile", 0.5))
 
     maps = Path(maps_dir)
     summary_header = ("det\tband\tbase\tfit_a\tfit_b\trmse\tn_sample\t"
-                      "center_x\tcenter_y\tradius_pix\tfit_mode")
+                      "n_clipped\tcenter_x\tcenter_y\tradius_pix\tfit_mode")
     summary_rows: list[str] = []
 
     for det in detectors:
@@ -1273,6 +2452,7 @@ def maps_background(maps_dir: str, config_path: str,
             band_dir = maps / det / label
             if not band_dir.is_dir():
                 continue
+            scale = _bkg_scale_for(scale_cfg, det, label)
             for counts_path in sorted(band_dir.glob(f"*_{label}_counts.fits")):
                 base = counts_path.stem.removesuffix(f"_{label}_counts")
                 exp_path = band_dir / f"{base}_{label}_exp_vig.fits"
@@ -1280,15 +2460,40 @@ def maps_background(maps_dir: str, config_path: str,
                     continue
                 bkg_path = band_dir / f"{base}_{label}_bkg.fits"
                 row = _fit_one_bkg(counts_path, exp_path, bkg_path,
-                                   mode, outside_frac)
+                                   mode, outside_frac, scale, sigma_clip,
+                                   floor_q, taper_q)
                 summary_rows.append(f"{det}\t{label}\t{base}\t{row}")
     _merge_tsv_keep_other(maps / "bkg_summary.tsv", summary_header,
                           (0,), summary_rows, set(detectors))
     _build_maps_manifest(maps, detectors, cut_bands)
 
 
+def _bkg_scale_for(cfg_val: Any, det: str, label: str) -> float:
+    """Resolve cfg.map_bkg_scale to a scalar for one (detector, band).
+    Accepts a number (applies everywhere) or a dict {DET: scalar} or
+    {DET: {BAND: scalar}}. Falls back to 1.0 if no match."""
+    if isinstance(cfg_val, (int, float)):
+        return float(cfg_val)
+    if isinstance(cfg_val, dict):
+        per_det = (cfg_val.get(det)
+                   or cfg_val.get(det.upper())
+                   or cfg_val.get(det.lower()))
+        if isinstance(per_det, (int, float)):
+            return float(per_det)
+        if isinstance(per_det, dict):
+            v = (per_det.get(label)
+                 or per_det.get(label.upper())
+                 or per_det.get(label.lower()))
+            if isinstance(v, (int, float)):
+                return float(v)
+    return 1.0
+
+
 def _fit_one_bkg(counts_path: Path, exp_path: Path, bkg_path: Path,
-                 mode: str, outside_frac: float) -> str:
+                 mode: str, outside_frac: float, scale: float = 1.0,
+                 sigma_clip: float = 5.0,
+                 floor_q: float = 0.05,
+                 taper_q: float = 0.5) -> str:
     counts_img, c_header = _read_first2d(counts_path)
     exp_img, _ = _read_first2d(exp_path)
     if counts_img.shape != exp_img.shape:
@@ -1310,32 +2515,67 @@ def _fit_one_bkg(counts_path: Path, exp_path: Path, bkg_path: Path,
         radius = 0.0
         sample = np.zeros_like(footprint, dtype=bool)
     n_sample = int(sample.sum())
-    c = counts_img[sample].astype(float) if n_sample else np.zeros(0)
-    e = exp_img[sample].astype(float) if n_sample else np.zeros(0)
-    a, b, rmse, fit_mode = _solve_bkg(c, e, mode)
-    bg = (a + b * exp_img).astype(np.float32)
-    bg = np.where(footprint, bg, 0.0).astype(np.float32)
+    c_all = counts_img[sample].astype(float) if n_sample else np.zeros(0)
+    e_all = exp_img[sample].astype(float) if n_sample else np.zeros(0)
 
-    new_header = fits.Header()
-    for key in c_header:
-        if key in {"SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2", "EXTEND"}:
-            continue
-        try:
-            new_header[key] = c_header[key]
-        except (ValueError, KeyError):
-            continue
-    out_hdu = fits.PrimaryHDU(data=bg, header=new_header)
+    # Initial fit, then iteratively drop pixels >sigma_clip·σ above the
+    # current model (Poisson σ = sqrt(predicted)) — robustly removes
+    # source contamination that snuck through the radius mask.
+    keep = np.ones_like(c_all, dtype=bool)
+    a, b, rmse, fit_mode = _solve_bkg(c_all, e_all, mode)
+    if sigma_clip > 0 and c_all.size:
+        for _ in range(3):
+            predicted = a + b * e_all
+            sigma = np.sqrt(np.maximum(predicted, 1.0))
+            new_keep = (c_all - predicted) <= sigma_clip * sigma
+            if np.array_equal(new_keep, keep):
+                break
+            keep = new_keep
+            if not keep.any():
+                break
+            a, b, rmse, fit_mode = _solve_bkg(c_all[keep], e_all[keep], mode)
+    n_used = int(keep.sum()) if c_all.size else 0
+    n_clipped = n_sample - n_used
+
+    # Taper the bkg by exposure across the entire vignetting curve:
+    # weight = min(1, exp / threshold), threshold = taper_q quantile of
+    # positive exposure (default = median). This makes bkg essentially
+    # scale with exp at vignetted pixels — pixels with exp ≥ median get
+    # the full constant `flat`-mode value, pixels well below the median
+    # get scaled-down bkg, and chip-edge / gap-edge frames that only
+    # barely clear the FOV no longer leak full bkg into other frames'
+    # chip gaps in the viewing-grid sum.
+    pos_e = exp_img[exp_img > 0]
+    if pos_e.size:
+        taper_thresh = float(np.quantile(pos_e, taper_q))
+    else:
+        taper_thresh = 0.0
+    bg = (scale * (a + b * exp_img)).astype(np.float32)
+    if taper_thresh > 0:
+        taper = np.where(exp_img > 0,
+                         np.clip(exp_img / taper_thresh, 0.0, 1.0),
+                         0.0)
+    else:
+        taper = footprint.astype(np.float32)
+    bg = (bg * taper).astype(np.float32)
+
+    out_hdu = fits.PrimaryHDU(data=bg, header=_image_header(c_header))
     out_hdu.header["BGMODEL"] = ("a+bE", "background model")
     out_hdu.header["BGMODE"]  = (fit_mode, "fit constraint mode")
     out_hdu.header["BGA"]     = (a, "fit intercept")
     out_hdu.header["BGB"]     = (b, "fit slope vs exp_vig")
+    out_hdu.header["BGSCALE"] = (scale, "post-fit multiplicative scale")
+    out_hdu.header["BGSIGCL"] = (sigma_clip, "sample sigma-clip threshold")
+    out_hdu.header["BGNCLIP"] = (n_clipped, "n pixels clipped from fit")
+    out_hdu.header["BGTAPERQ"]= (taper_q, "exp_vig taper quantile")
+    out_hdu.header["BGTAPERE"]= (taper_thresh, "exp_vig taper threshold")
     out_hdu.header["BGRMSE"]  = (rmse, "sample RMS residual")
     out_hdu.header["BG_CX"]   = (cx, "exclusion center x [pix]")
     out_hdu.header["BG_CY"]   = (cy, "exclusion center y [pix]")
     out_hdu.header["BG_RAD"]  = (radius, "exclusion radius [pix]")
-    out_hdu.header["BG_NSAM"] = (n_sample, "n sample pixels")
+    out_hdu.header["BG_NSAM"] = (n_used, "n pixels used in final fit")
     out_hdu.writeto(bkg_path, overwrite=True)
-    return (f"{a:.6g}\t{b:.6g}\t{rmse:.6g}\t{n_sample}"
+    return (f"{a:.6g}\t{b:.6g}\t{rmse:.6g}\t{n_used}\t{n_clipped}"
             f"\t{cx:.2f}\t{cy:.2f}\t{radius:.2f}\t{fit_mode}")
 
 
@@ -1344,8 +2584,8 @@ def maps_corrected(maps_dir: str, config_path: str,
     """(counts - bkg) / exp_vig per frame; not clipped."""
     cfg = load_config(config_path)
     cut_bands = _cut_bands(cfg)
-    detectors = (normalize_detectors(detectors_arg) if detectors_arg.strip()
-                 else normalize_detectors(cfg.get("detectors", "PN")))
+    detectors = _resolve_detectors(cfg, detectors_arg)
+    quantile = float(cfg.get("exp_floor_quantile", 0.01))
     maps = Path(maps_dir)
     for det in detectors:
         for band in cut_bands:
@@ -1360,27 +2600,35 @@ def maps_corrected(maps_dir: str, config_path: str,
                 if not (exp.is_file() and bkg.is_file()):
                     continue
                 out = band_dir / f"{base}_{label}_corrected.fits"
-                _make_corrected(counts, exp, bkg, out)
+                _make_corrected(counts, exp, bkg, out, quantile)
     _build_maps_manifest(maps, detectors, cut_bands)
 
 
+def _safe_rate(num: np.ndarray, exp: np.ndarray,
+               quantile: float = 0.01) -> np.ndarray:
+    """num / exp with the exposure map floored at its `quantile`-th
+    percentile of positive values (in-memory; the exposure FITS itself is
+    untouched). Pixels where exp == 0 stay at 0 (truly outside FOV); the
+    floor only affects the deep-vignetting tail where (num/exp) would
+    otherwise blow up to enormous magnitudes."""
+    pos = exp[exp > 0]
+    if pos.size == 0:
+        return np.zeros_like(num, dtype=np.float32)
+    floor = float(np.quantile(pos, quantile))
+    exp_safe = np.where(exp > 0, np.maximum(exp, floor), 0.0)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rate = np.where(exp_safe > 0, num / exp_safe, 0.0)
+    return rate.astype(np.float32)
+
+
 def _make_corrected(counts_path: Path, exp_path: Path, bkg_path: Path,
-                    out_path: Path) -> None:
+                    out_path: Path, quantile: float = 0.01) -> None:
     c, c_header = _read_first2d(counts_path)
     e, _ = _read_first2d(exp_path)
     b, _ = _read_first2d(bkg_path)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        rate = (c - b) / e
-    rate = np.where(np.isfinite(rate) & (e > 0), rate, 0.0).astype(np.float32)
-    new_header = fits.Header()
-    for key in c_header:
-        if key in {"SIMPLE", "BITPIX", "NAXIS", "NAXIS1", "NAXIS2", "EXTEND"}:
-            continue
-        try:
-            new_header[key] = c_header[key]
-        except (ValueError, KeyError):
-            continue
-    fits.PrimaryHDU(data=rate, header=new_header).writeto(out_path, overwrite=True)
+    rate = _safe_rate(c - b, e, quantile)
+    fits.PrimaryHDU(data=rate, header=_image_header(c_header)).writeto(
+        out_path, overwrite=True)
 
 
 def _build_maps_manifest(maps_dir: Path, _detectors_unused: list[str],
@@ -1439,7 +2687,7 @@ def _read_maps_grid(maps_dir: Path) -> dict[tuple[str, str, str], dict[str, floa
 
 
 def qc_maps(maps_dir: str, frames_dir: str, detectors_arg: str,
-            out_dir: str) -> None:
+            out_dir: str, config_path: str = "") -> None:
     """Per-(detector, band) mosaics of the nobkg-corrected (counts/exp_vig)
     and the corrected ((counts - bkg)/exp_vig) rate maps. Rates are co-added
     across frames as sum(num)/sum(exp) on a viewing grid built from the
@@ -1448,6 +2696,13 @@ def qc_maps(maps_dir: str, frames_dir: str, detectors_arg: str,
     maps = Path(maps_dir); frames = Path(frames_dir)
     out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
     detectors = normalize_detectors(detectors_arg)
+    quantile = 0.01
+    if config_path:
+        try:
+            quantile = float(load_config(config_path).get(
+                "exp_floor_quantile", 0.01))
+        except Exception:
+            pass
 
     files = sorted(p for p in maps.rglob("*") if p.is_file())
     _write_listing(out / "files.txt", files)
@@ -1514,9 +2769,8 @@ def qc_maps(maps_dir: str, frames_dir: str, detectors_arg: str,
                 sum_c[iy:iy+fy, ix:ix+fx] += cimg
                 sum_e[iy:iy+fy, ix:ix+fx] += eimg
                 sum_b[iy:iy+fy, ix:ix+fx] += bimg
-            with np.errstate(divide="ignore", invalid="ignore"):
-                nobkg = np.where(sum_e > 0, sum_c / sum_e, 0.0)
-                corr  = np.where(sum_e > 0, (sum_c - sum_b) / sum_e, 0.0)
+            nobkg = _safe_rate(sum_c,           sum_e, quantile)
+            corr  = _safe_rate(sum_c - sum_b,   sum_e, quantile)
             extent = (xmin, xmin + nx * bin_phys,
                       ymin, ymin + ny * bin_phys)
             boxes = _boxes_from_events(box_events.get(det, []))
@@ -1539,6 +2793,23 @@ def qc_maps(maps_dir: str, frames_dir: str, detectors_arg: str,
                 _save_mosaic(img, extent, boxes,
                              out / f"{det}_{band}_{tag}_mosaic.png", title,
                              vmin=vmin, vmax=vmax)
+
+            # Diverging-colormap render of the (full bkg-subtracted)
+            # corrected map: 0-centered linear vanimo, ±max(|p1|,|p99|).
+            finite = corr[np.isfinite(corr)]
+            if finite.size:
+                p1 = float(np.percentile(finite, 1))
+                p99 = float(np.percentile(finite, 99))
+                v = max(abs(p1), abs(p99), 1e-6)
+            else:
+                v = 1e-6
+            norm = Normalize(vmin=-v, vmax=v)
+            title_v = (f"{det}  {band}  corrected (vanimo)  "
+                       f"frames={len(band_rows)}  ±{v:.3g}")
+            _save_mosaic(corr, extent, boxes,
+                         out / f"{det}_{band}_corrected_vanimo_mosaic.png",
+                         title_v, norm=norm, cmap="vanimo",
+                         colorbar_label="rate")
             summary.append(
                 f"{det}\t{band}\t{len(band_rows)}\t{nx}\t{ny}"
                 f"\t{det}_{band}_counts_mosaic.png"
@@ -2010,18 +3281,23 @@ def _save_mosaic(img: np.ndarray, extent: tuple[float, float, float, float],
                  boxes: list[tuple[float, float, float, float]],
                  out_path: Path, title: str,
                  track_xy: tuple[np.ndarray, np.ndarray] | None = None,
-                 *, vmin: float | None = None, vmax: float | None = None) -> None:
+                 *, vmin: float | None = None, vmax: float | None = None,
+                 circles: list[tuple[float, float, float]] | None = None,
+                 cmap: str = "gray",
+                 norm: "matplotlib.colors.Normalize | None" = None,
+                 colorbar_label: str = "counts/bin") -> None:
     ny, nx = img.shape
     with plt.style.context("dark_background"):
         fig, ax = plt.subplots(figsize=(9, 9 * ny / nx + 0.6), dpi=120)
-        if vmin is None:
-            vmin = max(img.max() * 1e-4, 0.5)
-        if vmax is None:
-            vmax = max(img.max(), 1.0)
-        norm = LogNorm(vmin=vmin, vmax=vmax)
-        im = ax.imshow(img, origin="lower", cmap="gray", norm=norm,
+        if norm is None:
+            if vmin is None:
+                vmin = max(img.max() * 1e-4, 0.5)
+            if vmax is None:
+                vmax = max(img.max(), 1.0)
+            norm = LogNorm(vmin=vmin, vmax=vmax)
+        im = ax.imshow(img, origin="lower", cmap=cmap, norm=norm,
                        extent=extent, aspect="equal", interpolation="nearest")
-        fig.colorbar(im, ax=ax, label="counts/bin")
+        fig.colorbar(im, ax=ax, label=colorbar_label)
         for x0, x1, y0, y1 in boxes:
             ax.add_patch(Rectangle(
                 (x0, y0), x1 - x0, y1 - y0,
@@ -2037,6 +3313,13 @@ def _save_mosaic(img: np.ndarray, extent: tuple[float, float, float, float],
                        facecolor="#ff8833", edgecolor="black", zorder=6,
                        label="track end")
             ax.legend(loc="upper right", fontsize=7, framealpha=0.5)
+        if circles:
+            for cx, cy, cr in circles:
+                ax.add_patch(Circle(
+                    (cx, cy), cr,
+                    facecolor=(1.0, 0.33, 0.33, 0.35),
+                    edgecolor="black", linewidth=0.4, zorder=7,
+                ))
         ax.set_xlabel("X [det]"); ax.set_ylabel("Y [det]")
         ax.set_title(title)
         fig.tight_layout()
@@ -2142,6 +3425,26 @@ def main(argv: list[str]) -> int:
                 args[5] if len(args) == 6 else "")
     elif cmd == "qc-cut" and len(args) == 4:
         qc_cut(*args)
+    elif cmd == "cheese-detect" and len(args) in {5, 6}:
+        cheese_detect(args[0], args[1], args[2], args[3], args[4],
+                      args[5] if len(args) == 6 else "")
+    elif cmd == "cheese-mask" and len(args) in {4, 5}:
+        cheese_mask(args[0], args[1], args[2], args[3],
+                    args[4] if len(args) == 5 else "")
+    elif cmd == "qc-cheese" and len(args) == 4:
+        qc_cheese(*args)
+    elif cmd == "stack-events" and len(args) in {5, 6}:
+        stack_events(args[0], args[1], args[2], args[3], args[4],
+                     args[5] if len(args) == 6 else "")
+    elif cmd == "stack-coadd" and len(args) in {5, 6}:
+        stack_coadd(args[0], args[1], args[2], args[3], args[4],
+                    args[5] if len(args) == 6 else "")
+    elif cmd == "stack-merge" and len(args) in {2, 3}:
+        stack_merge(args[0], args[1],
+                    args[2] if len(args) == 3 else "")
+    elif cmd == "qc-stack" and len(args) in {3, 4}:
+        qc_stack(args[0], args[1], args[2],
+                 args[3] if len(args) == 4 else "")
     elif cmd == "build-track" and len(args) == 9:
         build_track(*args)
     elif cmd == "qc-track" and len(args) == 5:
@@ -2158,8 +3461,9 @@ def main(argv: list[str]) -> int:
     elif cmd == "maps-corrected" and len(args) in {2, 3}:
         maps_corrected(args[0], args[1],
                        args[2] if len(args) == 3 else "")
-    elif cmd == "qc-maps" and len(args) == 4:
-        qc_maps(*args)
+    elif cmd == "qc-maps" and len(args) in {4, 5}:
+        qc_maps(args[0], args[1], args[2], args[3],
+                args[4] if len(args) == 5 else "")
     else:
         die(__doc__)
     return 0

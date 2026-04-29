@@ -3,3 +3,4 @@ output/
 *.ds
 __pycache__
 old/
+misc/
