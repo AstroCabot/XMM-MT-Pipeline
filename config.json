@@ -12,7 +12,7 @@
   "map_bin_arcsec": 4.0,
   "map_pad_pix": 1,
   "map_eexpmap_attrebin": "0.020626481",
-  "map_bkg_constrain": "flat",
+  "map_bkg_constrain": "nonneg",
   "map_bkg_outside_radius_fraction": 0.5,
   "map_bkg_scale": {
     "PN": {"soft": 1.0, "hard": 1.0},
@@ -20,7 +20,7 @@
     "M2": {"soft": 1.0, "hard": 1.0}
   },
   "map_bkg_sigma_clip": 5.0,
-  "map_bkg_taper_quantile": 0.5,
+  "map_bkg_low_exp_quantile": 0.05,
   "exp_floor_quantile": 0.05,
 
   "cut_bands": [
@@ -30,8 +30,18 @@
   "cut_sigma_clip": Infinity,
   "cut_emanom_drop": ["B", "O"],
   "cut_min_ontime": 60.0,
+  "excluded_frames": [
+    "4759_0963720201_EPN_S003_P06_ImagingEvts",
+    "4759_0963720201_EPN_S003_P11_ImagingEvts",
+    "4759_0963720201_EPN_U027_ImagingEvts",
+    "4759_0963720201_EMOS1_S001_P07_ImagingEvts",
+    "4759_0963720201_EMOS1_U003_ImagingEvts",
+    "4759_0963720201_EMOS2_S002_P07_ImagingEvts",
+    "4759_0963720201_EMOS2_U003_ImagingEvts"
+  ],
 
   "stack_merge_weights": {"PN": 1.0, "M1": 0.4, "M2": 0.4},
+  "stack_min_exp_max": 500.0,
   "qc_stack_smooth_sigma_px": 3,
 
   "cheese_band": "hard",

@@ -479,9 +479,11 @@ stage_track() {
 
 _force_rm_per_det() {
   # Remove only the in-scope detectors' maps products with a given suffix.
+  # NOTE: the trailing star must NOT be quoted, or bash treats it as a
+  # literal `*` in the filename and rm silently does nothing.
   local suffix="$1" det
   for det in $DETECTORS; do
-    rm -f "$MAPSDIR/$det"/*/"*${suffix}"
+    rm -f "$MAPSDIR/$det"/*/*"${suffix}"
   done
 }
 
@@ -495,7 +497,7 @@ stage_maps_counts() {
   fi
   log_run maps_counts \
     "$PYTHON" "$SCRIPT_DIR/tools.py" maps-counts \
-      "$CUTDIR" "$MAPSDIR" "$LOGDIR" "$CONFIG" "$DETECTORS"
+      "$CUTDIR" "$MAPSDIR" "$FRAMESDIR" "$LOGDIR" "$CONFIG" "$DETECTORS"
   echo "maps-counts ok"
 }
 
@@ -508,6 +510,7 @@ stage_maps_exposure() {
   source "$ATT_ENV"
   if [[ "$FORCE" == "1" ]]; then
     _force_rm_per_det "_exp_vig.fits"
+    _force_rm_per_det "_exp_unvig.fits"
   fi
   log_run maps_exposure \
     "$PYTHON" "$SCRIPT_DIR/tools.py" maps-exposure \
@@ -764,7 +767,7 @@ stage_qc_cheese() {
   local out="$QCDIR/cheese"
   rm -rf "$out"
   "$PYTHON" "$SCRIPT_DIR/tools.py" qc-cheese \
-    "$CHEESEDIR" "$FRAMESDIR" "$DETECTORS" "$out"
+    "$CHEESEDIR" "$FRAMESDIR" "$DETECTORS" "$out" "$CONFIG"
   echo "qc-cheese wrote: $out"
 }
 

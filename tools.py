@@ -20,7 +20,9 @@ Subcommands:
   cut-run CLEANDIR FRAMESDIR OUTDIR LOGDIR CONFIG [DETECTORS]
                                               Build cut PI-bands; emanom CCD drop on MOS.
   qc-cut CUTDIR FRAMESDIR DETECTORS OUTDIR    Cut QC: per-(det,band) mosaics + frame boxes.
-  maps-counts CUTDIR MAPSDIR LOGDIR CONFIG    evselect per-frame counts images.
+  maps-counts CUTDIR MAPSDIR FRAMESDIR LOGDIR CONFIG [DETECTORS]
+                                              evselect per-frame counts images on a single
+                                              per-(det,frame) grid (broadband-derived).
   maps-exposure CUTDIR MAPSDIR ATTHK LOGDIR CONFIG
                                               eexpmap per-frame vignetted exposure maps.
   maps-background MAPSDIR CONFIG              a + b*E fit per frame on off-source pixels.
@@ -117,6 +119,33 @@ def _image_header(src_header: fits.Header) -> fits.Header:
         except (ValueError, KeyError):
             continue
     return new
+
+
+def _update_cut_dss(out_path: Path, pi_lo: int, pi_hi: int,
+                    pattern_hi: int) -> None:
+    """Rewrite the EVENTS-extension DSS PI and PATTERN values in-place.
+
+    Cut event files inherit their HDUs (and DSS) from the first clean-band
+    sub-file concatenated in (clean-band 1000), which describes only that
+    sub-band's filter — wrong for the wider cut band. Downstream SAS tools
+    that read DSS (arfgen, rmfgen, evselect with DSS-aware expressions)
+    would otherwise see e.g. PI=201:500 on a cut file that actually spans
+    201..1000 (soft) or 1001..4000 (hard).
+    """
+    with fits.open(out_path, mode="update") as hdul:
+        evt = next(h for h in hdul if h.name == "EVENTS")
+        hdr = evt.header
+        for k in list(hdr):
+            if not (k.startswith("DSTYP") and k[5:].isdigit()):
+                continue
+            idx = k[5:]
+            v = str(hdr[k]).strip().upper()
+            if v == "PI":
+                hdr[f"DSVAL{idx}"] = f"{pi_lo}:{pi_hi}"
+            elif v == "PATTERN":
+                hdr[f"DSVAL{idx}"] = f"0:{pattern_hi}"
+        hdr["BNDDSSFX"] = ("yes",
+                           "PI/PATTERN DSS rewritten to cut-band range")
 
 
 def _write_filtered_events(src_path: Path, kept_rows: np.ndarray,
@@ -1027,6 +1056,8 @@ def _cut_one_band(det: str, frame_paths: list[Path], band: dict[str, Any],
         out_path = events_dir / f"{frame.stem}_{label}_cut.fits"
         out_paths.append(out_path.resolve())
         _write_filtered_events(src, kept, out_path)
+        _update_cut_dss(out_path, pi_lo, pi_hi,
+                        4 if _family(det) == "pn" else 12)
 
     manifest = out_dir / "manifest" / f"{det}_{label}_cut.txt"
     manifest.write_text("\n".join(str(p) for p in out_paths) + "\n",
@@ -1128,7 +1159,8 @@ def qc_cut(cut_dir: str, frames_dir: str, detectors_arg: str,
 
 
 def _coadd_band_maps(maps_dir: Path, detectors: list[str], band: str,
-                     grids: dict[tuple[str, str, str], dict[str, float]]
+                     grids: dict[tuple[str, str, str], dict[str, float]],
+                     excluded: set[str] | None = None
                      ) -> tuple[np.ndarray, np.ndarray, float, float, float, int, int]:
     """Co-add per-frame counts and exp_vig across detectors for one band onto
     a sky-fixed viewing grid (aligned to the per-frame physical grids' bin).
@@ -1139,6 +1171,8 @@ def _coadd_band_maps(maps_dir: Path, detectors: list[str], band: str,
     band_rows = [r for r in rows
                  if r["band"] == band and r["det"] in detectors
                  and r["counts"] and r["exp_vig"]]
+    if excluded:
+        band_rows = [r for r in band_rows if r["base"] not in excluded]
     keys = [(r["det"], r["band"], r["base"]) for r in band_rows
             if (r["det"], r["band"], r["base"]) in grids]
     if not keys:
@@ -1300,6 +1334,7 @@ def cheese_detect(maps_dir: str, cut_dir: str, cheese_dir: str,
     likemin = float(cfg.get("cheese_eboxdetect_likemin", 8))
     boxsize = int(cfg.get("cheese_eboxdetect_boxsize", 5))
     nruns   = int(cfg.get("cheese_eboxdetect_nruns", 3))
+    excluded = set(str(s) for s in cfg.get("excluded_frames", []))
 
     cut_bands_cfg = _cut_bands(cfg)
     band_info = next((b for b in cut_bands_cfg if b["label"] == band), None)
@@ -1325,6 +1360,13 @@ def cheese_detect(maps_dir: str, cut_dir: str, cheese_dir: str,
         det_rows = [r for r in rows
                     if r["det"] == det and r["band"] == band
                     and r["counts"] and r["exp_vig"]]
+        if excluded:
+            before = len(det_rows)
+            det_rows = [r for r in det_rows if r["base"] not in excluded]
+            dropped = before - len(det_rows)
+            if dropped:
+                print(f"  cheese-detect: {det} excluding {dropped} "
+                      f"frame(s) per cfg.excluded_frames", flush=True)
         det_rows = [
             r for r in det_rows
             if (lambda img: bool((img > 0).any()))(
@@ -1356,7 +1398,7 @@ def cheese_detect(maps_dir: str, cut_dir: str, cheese_dir: str,
     # the whole observation, not just the detection-detector's FOV).
     apply_dets = _resolve_detectors(cfg, detectors_arg)
     _, _, xmin, ymin, bin_phys, nx, ny = _coadd_band_maps(
-        maps, apply_dets, band, grids)
+        maps, apply_dets, band, grids, excluded=excluded)
 
     sample_counts = next(
         (Path(r["counts"]) for r in rows
@@ -1474,6 +1516,7 @@ def cheese_mask(maps_dir: str, cut_dir: str, cheese_dir: str,
     cfg = load_config(config_path)
     detectors = _resolve_detectors(cfg, detectors_arg)
     cut_bands = _cut_bands(cfg)
+    excluded = set(str(s) for s in cfg.get("excluded_frames", []))
 
     maps = Path(maps_dir); cut = Path(cut_dir); cheese = Path(cheese_dir)
     sources = _read_sources(cheese)
@@ -1485,6 +1528,16 @@ def cheese_mask(maps_dir: str, cut_dir: str, cheese_dir: str,
             label = str(band["label"])
             evt_paths = _read_manifest(
                 cut / "manifest" / f"{det}_{label}_cut.txt")
+            if excluded:
+                before = len(evt_paths)
+                evt_paths = [
+                    p for p in evt_paths
+                    if p.stem.removesuffix(f"_{label}_cut") not in excluded
+                ]
+                dropped = before - len(evt_paths)
+                if dropped:
+                    print(f"  cheese-mask: {det} {label} excluding {dropped} "
+                          f"frame(s) per cfg.excluded_frames", flush=True)
             n_in = n_kept = n_frames = 0
             out_paths: list[Path] = []
             for src_path in evt_paths:
@@ -1523,6 +1576,8 @@ def cheese_mask(maps_dir: str, cut_dir: str, cheese_dir: str,
     for r in _read_maps_manifest_rows(maps):
         det = r["det"]
         if det not in detectors:
+            continue
+        if r["base"] in excluded:
             continue
         if not (r["counts"] and r["exp_vig"] and r["bkg"]):
             continue
@@ -1578,13 +1633,20 @@ def cheese_mask(maps_dir: str, cut_dir: str, cheese_dir: str,
 
 
 def qc_cheese(cheese_dir: str, frames_dir: str, detectors_arg: str,
-              out_dir: str) -> None:
+              out_dir: str, config_path: str = "") -> None:
     """Per-(det, band) mosaics of the *cut* events (pre-cheese, so the
     underlying source structure is visible) with translucent red circles
     overplotted to show what gets masked out at the cheese stage."""
     cheese = Path(cheese_dir); frames = Path(frames_dir)
     out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
     detectors = normalize_detectors(detectors_arg)
+    excluded: set[str] = set()
+    if config_path:
+        try:
+            excluded = set(str(s) for s in
+                           load_config(config_path).get("excluded_frames", []))
+        except Exception:
+            pass
 
     files = sorted(p for p in cheese.rglob("*") if p.is_file())
     _write_listing(out / "files.txt", files)
@@ -1596,6 +1658,18 @@ def qc_cheese(cheese_dir: str, frames_dir: str, detectors_arg: str,
 
     cut_dir = cheese.parent / "cut"
     events_by_det_band = _cut_events_by_det_band(cut_dir, detectors)
+    if excluded:
+        for det, by_band in events_by_det_band.items():
+            for label, paths in by_band.items():
+                before = len(paths)
+                by_band[label] = [
+                    p for p in paths
+                    if p.stem.removesuffix(f"_{label}_cut") not in excluded
+                ]
+                dropped = before - len(by_band[label])
+                if dropped:
+                    print(f"  qc-cheese: {det} {label} excluding {dropped} "
+                          f"frame(s) per cfg.excluded_frames", flush=True)
     box_events = {det: _read_manifest(frames / "manifest" / f"{det}_frames.txt")
                   for det in detectors}
     circles = _read_sources(cheese)
@@ -1686,6 +1760,7 @@ def stack_events(cheese_dir: str, track_fits: str, track_env: str,
     cfg = load_config(config_path)
     cut_bands = _cut_bands(cfg)
     detectors = _resolve_detectors(cfg, detectors_arg)
+    excluded = set(str(s) for s in cfg.get("excluded_frames", []))
 
     cheese = Path(cheese_dir); stack = Path(stack_dir)
     stack.mkdir(parents=True, exist_ok=True)
@@ -1712,6 +1787,17 @@ def stack_events(cheese_dir: str, track_fits: str, track_env: str,
             label = str(band["label"])
             srcs = _read_manifest(
                 cheese / "manifest" / f"{det}_{label}_cheesed.txt")
+            if excluded:
+                before = len(srcs)
+                srcs = [
+                    p for p in srcs
+                    if p.stem.removesuffix("_cheesed").removesuffix(
+                        f"_{label}_cut") not in excluded
+                ]
+                dropped = before - len(srcs)
+                if dropped:
+                    print(f"  stack-events: {det} {label} excluding {dropped} "
+                          f"frame(s) per cfg.excluded_frames", flush=True)
             out_dir = stack / "events" / det / label
             out_dir.mkdir(parents=True, exist_ok=True)
             paths: list[Path] = []
@@ -1850,6 +1936,8 @@ def stack_coadd(cheese_dir: str, stack_dir: str, track_fits: str,
     cut_bands = _cut_bands(cfg)
     detectors = _resolve_detectors(cfg, detectors_arg)
     quantile = float(cfg.get("exp_floor_quantile", 0.01))
+    min_exp_max = float(cfg.get("stack_min_exp_max", 0.0))
+    excluded = set(str(s) for s in cfg.get("excluded_frames", []))
 
     cheese = Path(cheese_dir); stack = Path(stack_dir)
     grids = _read_maps_grid(cheese.parent / "maps")
@@ -1876,8 +1964,45 @@ def stack_coadd(cheese_dir: str, stack_dir: str, track_fits: str,
             stack_paths = _read_manifest(
                 stack / "manifest" / f"{det}_{label}_stack.txt")
             stack_paths = [p for p in stack_paths if p.is_file()]
+            if excluded:
+                before = len(stack_paths)
+                stack_paths = [
+                    p for p in stack_paths
+                    if p.stem.removesuffix(f"_{label}_stack") not in excluded
+                ]
+                dropped = before - len(stack_paths)
+                if dropped:
+                    print(f"  stack-coadd: {det} {label} excluding {dropped} "
+                          f"frame(s) per cfg.excluded_frames", flush=True)
             if not stack_paths:
                 continue
+
+            # Drop short-exposure / slew-class frames whose bkg model would
+            # paint a near-empty footprint over a large area, leaving a
+            # negative halo in the comoving stack. The threshold is on the
+            # cheesed exp_vig peak — that's the per-pixel exposure most
+            # representative of how much we should trust this frame.
+            cheese_maps_dir = cheese / "maps" / det / label
+            if min_exp_max > 0:
+                kept: list[Path] = []
+                for p in stack_paths:
+                    base = p.stem.removesuffix(f"_{label}_stack")
+                    cexp = (cheese_maps_dir
+                            / f"{base}_{label}_exp_vig_cheesed.fits")
+                    if cexp.is_file():
+                        with fits.open(cexp) as h:
+                            e_max = float(np.asarray(h[0].data).max())
+                        if e_max < min_exp_max:
+                            print(
+                                f"  stack-coadd skip {det} {label} {base}: "
+                                f"exp_max={e_max:.0f}s < "
+                                f"stack_min_exp_max={min_exp_max:.0f}s",
+                                flush=True)
+                            continue
+                    kept.append(p)
+                stack_paths = kept
+                if not stack_paths:
+                    continue
 
             # Per-frame mid-time shift (for the maps integer shift AND to
             # size the stack grid via the shifted footprints) plus a
@@ -2252,7 +2377,11 @@ def _run_sas(tag: str, log_dir: Path, cmd: list[str]) -> None:
 
 def _frame_grid(event_path: Path, bin_arcsec: float, pad_pix: int
                 ) -> dict[str, float | int] | None:
-    """Per-frame physical-coordinate image grid from the event list X/Y bounds.
+    """Per-frame physical-coordinate image grid derived from the supplied
+    event list's X/Y bounds. Pass the **broadband** frame event list (post-
+    attitude-cluster, pre-band-cut) so the grid covers the full detector
+    footprint at this attitude — band-cut event lists are sparse and would
+    truncate the grid to where photons happened to land.
 
     The bin size is bin_arcsec / abs(REFXCDLT in arcsec); xmin/xmax/ymin/ymax
     are aligned to that bin and padded by pad_pix on each side so eexpmap
@@ -2287,20 +2416,41 @@ def _frame_base_from_cut(evt_path: Path, label: str) -> str:
     return s[:-len(suf)] if s.endswith(suf) else s
 
 
-def maps_counts(cut_dir: str, maps_dir: str, log_dir: str,
+def maps_counts(cut_dir: str, maps_dir: str, frames_dir: str, log_dir: str,
                 config_path: str, detectors_arg: str = "") -> None:
-    """Bin each cut event list into a counts image on a per-frame grid."""
+    """Bin each cut event list into a counts image on a per-frame grid.
+
+    The grid is derived once per (detector, frame) from the broadband
+    post-attitude-cluster frame event list (frames/manifest/<DET>_frames.txt),
+    so the same xmin/xmax/ymin/ymax/nx/ny are used for every cut band of
+    that frame. This guarantees that exposed pixels with zero events in a
+    sparse band (e.g. MOS soft) are still represented in the grid, instead
+    of being truncated by the band's event extent.
+    """
     cfg = load_config(config_path)
     cut_bands = _cut_bands(cfg)
     detectors = _resolve_detectors(cfg, detectors_arg)
     bin_arcsec = float(cfg.get("map_bin_arcsec", 4.0))
     pad_pix = int(cfg.get("map_pad_pix", 1))
+    excluded = set(str(s) for s in cfg.get("excluded_frames", []))
 
     cut = Path(cut_dir); maps = Path(maps_dir); log = Path(log_dir)
+    frames = Path(frames_dir)
     grid_header = ("det\tband\tbase\tximagemin\tximagemax\tyimagemin"
                    "\tyimagemax\tbin\tnx\tny")
     grid_rows: list[str] = []
     for det in detectors:
+        # One grid per (det, frame) from the broadband frame event list.
+        frame_paths = _read_manifest(
+            frames / "manifest" / f"{det}_frames.txt")
+        grid_by_base: dict[str, dict[str, float | int]] = {}
+        for fp in frame_paths:
+            if not fp.is_file():
+                continue
+            g = _frame_grid(fp, bin_arcsec, pad_pix)
+            if g is not None:
+                grid_by_base[fp.stem] = g
+
         for band in cut_bands:
             label = str(band["label"])
             events = _read_manifest(cut / "manifest" / f"{det}_{label}_cut.txt")
@@ -2308,9 +2458,16 @@ def maps_counts(cut_dir: str, maps_dir: str, log_dir: str,
             band_dir.mkdir(parents=True, exist_ok=True)
             for evt in events:
                 base = _frame_base_from_cut(evt, label)
-                grid = _frame_grid(evt, bin_arcsec, pad_pix)
-                if grid is None:
+                if base in excluded:
+                    print(f"  maps-counts skip excluded: {base}", flush=True)
                     continue
+                grid = grid_by_base.get(base)
+                if grid is None:
+                    # Fallback: derive from the cut events (only happens if
+                    # the frame manifest doesn't list this base).
+                    grid = _frame_grid(evt, bin_arcsec, pad_pix)
+                    if grid is None:
+                        continue
                 grid_rows.append(
                     f"{det}\t{label}\t{base}\t{grid['xmin']:g}\t{grid['xmax']:g}"
                     f"\t{grid['ymin']:g}\t{grid['ymax']:g}\t{grid['bin']:g}"
@@ -2344,7 +2501,12 @@ def maps_counts(cut_dir: str, maps_dir: str, log_dir: str,
 def maps_exposure(cut_dir: str, maps_dir: str, atthk_path: str,
                   log_dir: str, config_path: str,
                   detectors_arg: str = "") -> None:
-    """Build per-frame vignetted exposure maps via eexpmap."""
+    """Build per-frame exposure maps via eexpmap. Two are produced per
+    frame and band: `*_exp_vig.fits` (vignetting on, the standard exposure
+    used for rate calculations) and `*_exp_unvig.fits` (vignetting off,
+    used by the two-component bkg fit to capture the unvignetted
+    instrumental/QPB component separately from the vignetted sky bkg).
+    """
     cfg = load_config(config_path)
     cut_bands = _cut_bands(cfg)
     detectors = _resolve_detectors(cfg, detectors_arg)
@@ -2366,19 +2528,21 @@ def maps_exposure(cut_dir: str, maps_dir: str, atthk_path: str,
                 evt = cut / "events" / det / label / f"{base}_{label}_cut.fits"
                 if not evt.is_file():
                     continue
-                outp = band_dir / f"{base}_{label}_exp_vig.fits"
-                if outp.is_file():
-                    continue
-                _run_sas(f"maps_exposure_{det}_{label}_{base}", log, [
-                    "eexpmap",
-                    f"imageset={counts}",
-                    f"attitudeset={atthk_path}",
-                    f"eventset={evt}",
-                    f"expimageset={outp}",
-                    f"pimin={pi_lo}", f"pimax={pi_hi}",
-                    "withvignetting=yes",
-                    f"attrebin={attrebin}",
-                ])
+                for tag, vig in (("exp_vig", "yes"), ("exp_unvig", "no")):
+                    outp = band_dir / f"{base}_{label}_{tag}.fits"
+                    if outp.is_file():
+                        continue
+                    _run_sas(
+                        f"maps_exposure_{tag}_{det}_{label}_{base}", log, [
+                            "eexpmap",
+                            f"imageset={counts}",
+                            f"attitudeset={atthk_path}",
+                            f"eventset={evt}",
+                            f"expimageset={outp}",
+                            f"pimin={pi_lo}", f"pimax={pi_hi}",
+                            f"withvignetting={vig}",
+                            f"attrebin={attrebin}",
+                        ])
     _build_maps_manifest(maps, detectors, cut_bands)
 
 
@@ -2389,6 +2553,34 @@ def _read_first2d(path: Path) -> tuple[np.ndarray, fits.Header]:
             if d is not None and np.asarray(d).ndim >= 2:
                 return np.asarray(d, dtype=float), hdu.header.copy()
     die(f"no 2D image in {path}")
+
+
+def _solve_bkg2(c: np.ndarray, e_unvig: np.ndarray, e_vig: np.ndarray,
+                mode: str) -> tuple[float, float, float, str]:
+    """Two-component bkg fit: c ≈ q*e_unvig + s*e_vig.
+
+    `q` is the unvignetted (instrumental / QPB-like) per-second-per-pixel
+    coefficient; `s` is the vignetted (sky / SWCX-like) coefficient. Modes:
+        "none"   – ordinary least squares (q, s can be any sign)
+        "nonneg" – constrained to q, s ≥ 0 via NNLS (default-ish for
+                   physical bkg components)
+    Returns (q, s, rmse, fit_mode_label).
+    """
+    if c.size < 2:
+        return 0.0, 0.0, 0.0, "empty"
+    A = np.column_stack([e_unvig, e_vig])
+    if mode == "nonneg":
+        from scipy.optimize import nnls
+        sol, _ = nnls(A, c)
+        q, s = float(sol[0]), float(sol[1])
+        label = "nonneg"
+    else:
+        sol, *_ = np.linalg.lstsq(A, c, rcond=None)
+        q, s = float(sol[0]), float(sol[1])
+        label = "lstsq"
+    pred = q * e_unvig + s * e_vig
+    rmse = float(np.sqrt(np.mean((c - pred) ** 2)))
+    return q, s, rmse, label
 
 
 def _solve_bkg(c: np.ndarray, e: np.ndarray, mode: str) -> tuple[float, float, float, str]:
@@ -2428,21 +2620,28 @@ def _solve_bkg(c: np.ndarray, e: np.ndarray, mode: str) -> tuple[float, float, f
 
 def maps_background(maps_dir: str, config_path: str,
                     detectors_arg: str = "") -> None:
-    """Per-frame a + b·E background fit on off-source sample pixels."""
+    """Per-frame two-component bkg fit: counts ≈ q·E_unvig + s·E_vig.
+
+    `q` represents the unvignetted instrumental/QPB component (constant
+    per-pixel-per-time, since particles aren't focused by the mirror); `s`
+    represents the vignetted sky / SWCX component (scales with effective-
+    area×time = exp_vig). Sample pixels are taken outside an off-source
+    radius (rough comet/source exclusion), with low-exposure pixels
+    excluded, and 5σ Poisson outliers iteratively dropped.
+    """
     cfg = load_config(config_path)
     cut_bands = _cut_bands(cfg)
     detectors = _resolve_detectors(cfg, detectors_arg)
-    mode = str(cfg.get("map_bkg_constrain", "flat")).strip().lower()
-    if mode not in {"none", "nonneg", "flat"}:
-        die(f"map_bkg_constrain must be none/nonneg/flat (got {mode!r})")
+    mode = str(cfg.get("map_bkg_constrain", "nonneg")).strip().lower()
+    if mode not in {"none", "nonneg"}:
+        die(f"map_bkg_constrain must be none/nonneg (got {mode!r})")
     outside_frac = float(cfg.get("map_bkg_outside_radius_fraction", 0.5))
     scale_cfg = cfg.get("map_bkg_scale", 1.0)
     sigma_clip = float(cfg.get("map_bkg_sigma_clip", 5.0))
-    floor_q = float(cfg.get("exp_floor_quantile", 0.05))
-    taper_q = float(cfg.get("map_bkg_taper_quantile", 0.5))
+    low_exp_q = float(cfg.get("map_bkg_low_exp_quantile", 0.05))
 
     maps = Path(maps_dir)
-    summary_header = ("det\tband\tbase\tfit_a\tfit_b\trmse\tn_sample\t"
+    summary_header = ("det\tband\tbase\tfit_q\tfit_s\trmse\tn_sample\t"
                       "n_clipped\tcenter_x\tcenter_y\tradius_pix\tfit_mode")
     summary_rows: list[str] = []
 
@@ -2455,13 +2654,14 @@ def maps_background(maps_dir: str, config_path: str,
             scale = _bkg_scale_for(scale_cfg, det, label)
             for counts_path in sorted(band_dir.glob(f"*_{label}_counts.fits")):
                 base = counts_path.stem.removesuffix(f"_{label}_counts")
-                exp_path = band_dir / f"{base}_{label}_exp_vig.fits"
-                if not exp_path.is_file():
+                vig_path   = band_dir / f"{base}_{label}_exp_vig.fits"
+                unvig_path = band_dir / f"{base}_{label}_exp_unvig.fits"
+                if not (vig_path.is_file() and unvig_path.is_file()):
                     continue
                 bkg_path = band_dir / f"{base}_{label}_bkg.fits"
-                row = _fit_one_bkg(counts_path, exp_path, bkg_path,
-                                   mode, outside_frac, scale, sigma_clip,
-                                   floor_q, taper_q)
+                row = _fit_one_bkg(counts_path, vig_path, unvig_path,
+                                   bkg_path, mode, outside_frac, scale,
+                                   sigma_clip, low_exp_q)
                 summary_rows.append(f"{det}\t{label}\t{base}\t{row}")
     _merge_tsv_keep_other(maps / "bkg_summary.tsv", summary_header,
                           (0,), summary_rows, set(detectors))
@@ -2489,17 +2689,31 @@ def _bkg_scale_for(cfg_val: Any, det: str, label: str) -> float:
     return 1.0
 
 
-def _fit_one_bkg(counts_path: Path, exp_path: Path, bkg_path: Path,
-                 mode: str, outside_frac: float, scale: float = 1.0,
-                 sigma_clip: float = 5.0,
-                 floor_q: float = 0.05,
-                 taper_q: float = 0.5) -> str:
+def _fit_one_bkg(counts_path: Path, vig_path: Path, unvig_path: Path,
+                 bkg_path: Path, mode: str, outside_frac: float,
+                 scale: float = 1.0, sigma_clip: float = 5.0,
+                 low_exp_q: float = 0.05) -> str:
+    """Two-component bkg fit and bkg image writer.
+
+    Reads counts, vignetted exposure (exp_vig) and unvignetted exposure
+    (exp_unvig). Solves c ≈ q·E_unvig + s·E_vig on a sample of valid
+    off-source pixels (footprint ∩ outside-radius ∩ finite ∩ exp_vig in
+    the upper (1-low_exp_q) of positive exposures). Iteratively drops
+    >sigma_clip·σ Poisson outliers from the fit. Then writes the bkg
+    image as scale·(q·E_unvig + s·E_vig), zeroed outside the footprint.
+    No post-fit taper — the spatial profile comes from the model itself.
+    """
     counts_img, c_header = _read_first2d(counts_path)
-    exp_img, _ = _read_first2d(exp_path)
-    if counts_img.shape != exp_img.shape:
-        die(f"counts/exposure shape mismatch: {counts_path} vs {exp_path}")
-    footprint = np.isfinite(exp_img) & (exp_img > 0)
+    exp_vig, _ = _read_first2d(vig_path)
+    exp_unvig, _ = _read_first2d(unvig_path)
+    if not (counts_img.shape == exp_vig.shape == exp_unvig.shape):
+        die(f"shape mismatch among counts/vig/unvig: {counts_path}")
+
+    footprint = np.isfinite(exp_vig) & (exp_vig > 0)
     ny, nx = counts_img.shape
+
+    # Source/comet exclusion via outside-radius circle (radius derived
+    # from the footprint extent).
     if footprint.any():
         ys, xs = np.where(footprint)
         cy = float(ys.mean()); cx = float(xs.mean())
@@ -2507,75 +2721,65 @@ def _fit_one_bkg(counts_path: Path, exp_path: Path, bkg_path: Path,
         radius = outside_frac * half
         yy, xx = np.ogrid[:ny, :nx]
         outside_circle = (yy - cy) ** 2 + (xx - cx) ** 2 >= radius * radius
-        sample = footprint & outside_circle & np.isfinite(counts_img)
+        sample = (footprint & outside_circle
+                  & np.isfinite(counts_img) & np.isfinite(exp_unvig))
         if not sample.any():
-            sample = footprint & np.isfinite(counts_img)
+            sample = (footprint & np.isfinite(counts_img)
+                      & np.isfinite(exp_unvig))
     else:
         cy = (ny - 1) / 2.0; cx = (nx - 1) / 2.0
         radius = 0.0
         sample = np.zeros_like(footprint, dtype=bool)
+
+    # Drop the bottom low_exp_q fraction of positive exposures from the
+    # fit — those vignetting-tail pixels are individually unreliable.
+    if low_exp_q > 0 and footprint.any():
+        thresh = float(np.quantile(exp_vig[footprint], low_exp_q))
+        sample &= exp_vig >= thresh
+
     n_sample = int(sample.sum())
     c_all = counts_img[sample].astype(float) if n_sample else np.zeros(0)
-    e_all = exp_img[sample].astype(float) if n_sample else np.zeros(0)
+    eu_all = exp_unvig[sample].astype(float) if n_sample else np.zeros(0)
+    ev_all = exp_vig[sample].astype(float)   if n_sample else np.zeros(0)
 
-    # Initial fit, then iteratively drop pixels >sigma_clip·σ above the
-    # current model (Poisson σ = sqrt(predicted)) — robustly removes
-    # source contamination that snuck through the radius mask.
-    keep = np.ones_like(c_all, dtype=bool)
-    a, b, rmse, fit_mode = _solve_bkg(c_all, e_all, mode)
-    if sigma_clip > 0 and c_all.size:
+    # Initial fit; iteratively drop >sigma_clip·σ Poisson outliers.
+    keep = np.ones(n_sample, dtype=bool)
+    q, s, rmse, fit_mode = _solve_bkg2(c_all, eu_all, ev_all, mode)
+    if sigma_clip > 0 and n_sample > 1:
         for _ in range(3):
-            predicted = a + b * e_all
+            predicted = q * eu_all + s * ev_all
             sigma = np.sqrt(np.maximum(predicted, 1.0))
             new_keep = (c_all - predicted) <= sigma_clip * sigma
             if np.array_equal(new_keep, keep):
                 break
             keep = new_keep
-            if not keep.any():
+            if int(keep.sum()) < 2:
                 break
-            a, b, rmse, fit_mode = _solve_bkg(c_all[keep], e_all[keep], mode)
-    n_used = int(keep.sum()) if c_all.size else 0
+            q, s, rmse, fit_mode = _solve_bkg2(
+                c_all[keep], eu_all[keep], ev_all[keep], mode)
+    n_used = int(keep.sum()) if n_sample else 0
     n_clipped = n_sample - n_used
 
-    # Taper the bkg by exposure across the entire vignetting curve:
-    # weight = min(1, exp / threshold), threshold = taper_q quantile of
-    # positive exposure (default = median). This makes bkg essentially
-    # scale with exp at vignetted pixels — pixels with exp ≥ median get
-    # the full constant `flat`-mode value, pixels well below the median
-    # get scaled-down bkg, and chip-edge / gap-edge frames that only
-    # barely clear the FOV no longer leak full bkg into other frames'
-    # chip gaps in the viewing-grid sum.
-    pos_e = exp_img[exp_img > 0]
-    if pos_e.size:
-        taper_thresh = float(np.quantile(pos_e, taper_q))
-    else:
-        taper_thresh = 0.0
-    bg = (scale * (a + b * exp_img)).astype(np.float32)
-    if taper_thresh > 0:
-        taper = np.where(exp_img > 0,
-                         np.clip(exp_img / taper_thresh, 0.0, 1.0),
-                         0.0)
-    else:
-        taper = footprint.astype(np.float32)
-    bg = (bg * taper).astype(np.float32)
+    # Build bkg image: q·E_unvig + s·E_vig, zeroed outside footprint.
+    bg = (scale * (q * exp_unvig + s * exp_vig)).astype(np.float32)
+    bg = np.where(footprint, bg, 0.0).astype(np.float32)
 
     out_hdu = fits.PrimaryHDU(data=bg, header=_image_header(c_header))
-    out_hdu.header["BGMODEL"] = ("a+bE", "background model")
-    out_hdu.header["BGMODE"]  = (fit_mode, "fit constraint mode")
-    out_hdu.header["BGA"]     = (a, "fit intercept")
-    out_hdu.header["BGB"]     = (b, "fit slope vs exp_vig")
-    out_hdu.header["BGSCALE"] = (scale, "post-fit multiplicative scale")
-    out_hdu.header["BGSIGCL"] = (sigma_clip, "sample sigma-clip threshold")
-    out_hdu.header["BGNCLIP"] = (n_clipped, "n pixels clipped from fit")
-    out_hdu.header["BGTAPERQ"]= (taper_q, "exp_vig taper quantile")
-    out_hdu.header["BGTAPERE"]= (taper_thresh, "exp_vig taper threshold")
-    out_hdu.header["BGRMSE"]  = (rmse, "sample RMS residual")
-    out_hdu.header["BG_CX"]   = (cx, "exclusion center x [pix]")
-    out_hdu.header["BG_CY"]   = (cy, "exclusion center y [pix]")
-    out_hdu.header["BG_RAD"]  = (radius, "exclusion radius [pix]")
-    out_hdu.header["BG_NSAM"] = (n_used, "n pixels used in final fit")
+    out_hdu.header["BGMODEL"]  = ("q*Eu+s*Ev", "two-component bkg model")
+    out_hdu.header["BGMODE"]   = (fit_mode, "fit constraint mode")
+    out_hdu.header["BGQ"]      = (q, "unvig (instrumental) coefficient")
+    out_hdu.header["BGS"]      = (s, "vig (sky) coefficient")
+    out_hdu.header["BGSCALE"]  = (scale, "post-fit multiplicative scale")
+    out_hdu.header["BGSIGCL"]  = (sigma_clip, "sample sigma-clip threshold")
+    out_hdu.header["BGNCLIP"]  = (n_clipped, "n pixels clipped from fit")
+    out_hdu.header["BGLOWQ"]   = (low_exp_q, "low-exposure mask quantile")
+    out_hdu.header["BGRMSE"]   = (rmse, "sample RMS residual")
+    out_hdu.header["BG_CX"]    = (cx, "exclusion center x [pix]")
+    out_hdu.header["BG_CY"]    = (cy, "exclusion center y [pix]")
+    out_hdu.header["BG_RAD"]   = (radius, "exclusion radius [pix]")
+    out_hdu.header["BG_NSAM"]  = (n_used, "n pixels used in final fit")
     out_hdu.writeto(bkg_path, overwrite=True)
-    return (f"{a:.6g}\t{b:.6g}\t{rmse:.6g}\t{n_used}\t{n_clipped}"
+    return (f"{q:.6g}\t{s:.6g}\t{rmse:.6g}\t{n_used}\t{n_clipped}"
             f"\t{cx:.2f}\t{cy:.2f}\t{radius:.2f}\t{fit_mode}")
 
 
@@ -2697,10 +2901,12 @@ def qc_maps(maps_dir: str, frames_dir: str, detectors_arg: str,
     out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
     detectors = normalize_detectors(detectors_arg)
     quantile = 0.01
+    excluded: set[str] = set()
     if config_path:
         try:
-            quantile = float(load_config(config_path).get(
-                "exp_floor_quantile", 0.01))
+            cfg = load_config(config_path)
+            quantile = float(cfg.get("exp_floor_quantile", 0.01))
+            excluded = set(str(s) for s in cfg.get("excluded_frames", []))
         except Exception:
             pass
 
@@ -2730,6 +2936,13 @@ def qc_maps(maps_dir: str, frames_dir: str, detectors_arg: str,
             band_rows = [r for r in rows if r["det"] == det and r["band"] == band]
             band_rows = [r for r in band_rows
                          if r["counts"] and r["exp_vig"] and r["bkg"]]
+            if excluded:
+                before = len(band_rows)
+                band_rows = [r for r in band_rows if r["base"] not in excluded]
+                dropped = before - len(band_rows)
+                if dropped:
+                    print(f"  qc-maps: {det} {band} excluding {dropped} "
+                          f"frame(s) per cfg.excluded_frames", flush=True)
             if not band_rows:
                 continue
             keys = [(det, band, r["base"]) for r in band_rows]
@@ -3431,8 +3644,9 @@ def main(argv: list[str]) -> int:
     elif cmd == "cheese-mask" and len(args) in {4, 5}:
         cheese_mask(args[0], args[1], args[2], args[3],
                     args[4] if len(args) == 5 else "")
-    elif cmd == "qc-cheese" and len(args) == 4:
-        qc_cheese(*args)
+    elif cmd == "qc-cheese" and len(args) in {4, 5}:
+        qc_cheese(args[0], args[1], args[2], args[3],
+                  args[4] if len(args) == 5 else "")
     elif cmd == "stack-events" and len(args) in {5, 6}:
         stack_events(args[0], args[1], args[2], args[3], args[4],
                      args[5] if len(args) == 6 else "")
@@ -3449,9 +3663,9 @@ def main(argv: list[str]) -> int:
         build_track(*args)
     elif cmd == "qc-track" and len(args) == 5:
         qc_track(*args)
-    elif cmd == "maps-counts" and len(args) in {4, 5}:
-        maps_counts(args[0], args[1], args[2], args[3],
-                    args[4] if len(args) == 5 else "")
+    elif cmd == "maps-counts" and len(args) in {5, 6}:
+        maps_counts(args[0], args[1], args[2], args[3], args[4],
+                    args[5] if len(args) == 6 else "")
     elif cmd == "maps-exposure" and len(args) in {5, 6}:
         maps_exposure(args[0], args[1], args[2], args[3], args[4],
                       args[5] if len(args) == 6 else "")
