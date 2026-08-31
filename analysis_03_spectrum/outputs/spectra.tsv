@@ -1,0 +1,7 @@
+region	det	n_frames	exposure_s	omega_arcmin2	response_throughput	full_area_arcmin2	source_counts	background_counts	fit_low_keV	fit_high_keV	group_min_counts	channel_max	pn_oot_fraction	source_pha	background_pha	rmf	arf
+inner	pn	8	19286.72358927202	115.61454544162748	0.7224651320523277	119.46778729901185	31600.0	2262.5106179714203	0.35	1.1	25	20479	0.063	pn-inner-source.pi	pn-inner-background.pi	pn-inner.rmf	pn-inner.arf
+inner	mos1	7	28435.92542308347	114.99539462401627	0.7522474627499702	119.46778729901185	9283.0	714.8520464673638	0.35	1.1	25	11999	0.063	mos1-inner-source.pi	mos1-inner-background.pi	mos1-inner.rmf	mos1-inner.arf
+inner	mos2	7	32967.96227497406	114.97023156082383	0.8033975616928101	119.46778729901185	9813.0	616.6991139575839	0.35	1.1	25	11999	0.063	mos2-inner-source.pi	mos2-inner-background.pi	mos2-inner.rmf	mos2-inner.arf
+outer	pn	8	19271.72181180217	169.47714846289807	0.5315983375336992	174.53292519943295	14745.0	2549.0324952602386	0.35	1.1	25	20479	0.063	pn-outer-source.pi	pn-outer-background.pi	pn-outer.rmf	pn-outer.arf
+outer	mos1	7	28433.49128058339	167.7561621037113	0.23031127004868926	174.53292519943295	1923.0	509.4073948189616	0.35	1.1	25	11999	0.063	mos1-outer-source.pi	mos1-outer-background.pi	mos1-outer.rmf	mos1-outer.arf
+outer	mos2	7	33002.04280880865	168.15884380797695	0.4258683209398832	174.53292519943295	3369.0	685.7478273361921	0.35	1.1	25	11999	0.063	mos2-outer-source.pi	mos2-outer-background.pi	mos2-outer.rmf	mos2-outer.arf

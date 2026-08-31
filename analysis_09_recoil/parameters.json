@@ -1,0 +1,7 @@
+{
+  "nucleus": {"area_product_km2": 0.22, "area_product_sigma_km2": 0.07, "albedo": 0.04, "density_kg_m3": 500.0},
+  "spada": {"symmetric_A1_au_d2": 4.941e-8, "delayed_A1_au_d2": 5.381e-8, "delay_days": 7.49},
+  "gas": {"h2_temperature_K": [100.0, 140.0]},
+  "oumuamua": {"full_axes_m": [115.0, 111.0, 19.0], "axes_albedo": 0.1, "density_kg_m3": 500.0, "temperature_K": 100.0, "collimation": 0.75, "acceleration_1au_m_s2": 4.92e-6, "published_H2_mass_loss_kg_s": [0.01, 0.8]},
+  "reservoir": {"radius_m": 1300.0, "activity_interval_days": 249.7911673611111, "gas_erosion_m": [1.28, 5.53], "dust_erosion_m": [2.57, 27.93], "water_equivalent_density_kg_m3": [500.0, 1000.0], "h2_per_h2o": [0.30, 0.40]}
+}

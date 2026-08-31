@@ -1,0 +1,45 @@
+{
+  "orbit": {
+    "perihelion_q_au": 1.356481057231181,
+    "eccentricity": 6.141351449317625,
+    "perihelion_jd_tdb": 2460977.995262847653,
+    "observation_jd_tdb": 2461013.291968092,
+    "elements_source": "JPL SBDB solution 54, 2026-08-29",
+    "observation_epoch_source": "accepted XMM frame GTIs"
+  },
+  "shells": [160, 1.3, 3000000000.0],
+  "quadrature": {
+    "granddaughter_shell_stride": 4,
+    "granddaughter_radial_stride": 4,
+    "psf_radial_order": 4,
+    "psf_azimuth_order": 384
+  },
+  "source_grid_arcmin": [0.01, 30.0, 0.02],
+  "photons_per_captured_ion": 1.0,
+  "cross_section_cm2": {
+    "H2O": 4.73e-15,
+    "CO2": 4.40e-15,
+    "CO": 5.41e-15,
+    "daughter_proxy": 4.81e-15
+  },
+  "fixed_velocity_km_s": {
+    "heavy_daughter": 1.685,
+    "photolytic_H2": 11.335
+  },
+  "priors": {
+    "beta_H2": [0.0, 1.0],
+    "log10_H2_ratio": [-4.0, 1.0],
+    "parent_velocity": [0.37, 0.05],
+    "OH_velocity": [0.30, 2.57],
+    "O_velocity": [0.30, 3.07],
+    "H_velocity": [4.0, 24.0],
+    "jitter_sigma": 0.10
+  },
+  "mcmc": {
+    "walkers": 96,
+    "burn_steps": 500,
+    "retained_steps": 1500,
+    "processes": 20,
+    "seed": 20260829
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "group_min_counts": 25,
+  "channel_max": {
+    "pn": 20479,
+    "mos1": 11999,
+    "mos2": 11999
+  },
+  "model": {
+    "nh_1e22_cm2": 0.020,
+    "lhb_kT_keV": 0.10,
+    "halo_kT_keV": 0.25,
+    "cxb_index": 1.46,
+    "lhb_norm_start": 1.0e-5,
+    "halo_norm_start": 8.0e-7,
+    "cxb_norm_start": 8.88e-7,
+    "cx_temperature_start_keV": 0.18,
+    "cx_temperature_bounds_keV": [0.08, 1.0],
+    "cx_collision_starts_keV_u": [4.0, 40.0],
+    "cx_collision_bounds_keV_u": [0.2, 100.0],
+    "cx_donor_helium_fraction": 0.09,
+    "crosscal_bounds": [0.5, 1.5]
+  }
+}

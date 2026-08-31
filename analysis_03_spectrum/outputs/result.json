@@ -1,0 +1,133 @@
+{
+  "distance_au": 1.8825587020162007,
+  "heliocentric_distance_au": 1.8687957011831113,
+  "fit_band_keV": [
+    0.35,
+    1.1
+  ],
+  "model": {
+    "expression": "constant*constant*(apec+tbabs*(apec+powerlaw)+vacx2)",
+    "abundances": "wilm",
+    "cross_sections": "vern",
+    "recombtype": 1,
+    "acxmodel": 8,
+    "collntype": 1,
+    "free_parameters": 9
+  },
+  "fit": {
+    "chi2": 928.8418083875073,
+    "dof": 628,
+    "parameters": {
+      "lhb_norm": 1.417678732076413e-05,
+      "halo_norm": 1.3551191727729362e-06,
+      "cxb_norm": 9.157512118952828e-07,
+      "cx_temperature_keV": 0.17125506632748755,
+      "cx_collision_keV_u": 38.929820630206436
+    },
+    "crosscal": {
+      "pn": 1.0,
+      "mos1": 0.820057277668361,
+      "mos2": 0.7607963959251689
+    },
+    "profile_intervals_1sigma": {
+      "lhb_norm": [
+        1.3179835156592507e-05,
+        1.5180583894670551e-05
+      ],
+      "halo_norm": [
+        1.2432098829675559e-06,
+        1.4684482647214266e-06
+      ],
+      "cxb_norm": [
+        8.517573947669579e-07,
+        9.795161649115556e-07
+      ],
+      "cx_temperature_keV": [
+        0.17049344275071668,
+        0.1720699519524765
+      ],
+      "cx_collision_keV_u": [
+        37.808388829941116,
+        39.910479703864006
+      ],
+      "crosscal_mos1": [
+        0.810402294032281,
+        0.8298539235900418
+      ],
+      "crosscal_mos2": [
+        0.7524764984995516,
+        0.7692361962779437
+      ],
+      "cx_norm_inner": [
+        0.013279026488524196,
+        0.014127395463155864
+      ],
+      "cx_norm_outer": [
+        0.0030254313730311627,
+        0.0033706965317638693
+      ]
+    }
+  },
+  "detector_K_ct_s_per_erg_cm2_s": {
+    "pn": 541676107709.7982,
+    "mos1": 97367331020.41568,
+    "mos2": 84364743144.025
+  },
+  "response_throughput": {
+    "pn": 0.7224651320523277,
+    "mos1": 0.7522474627499702,
+    "mos2": 0.8033975616928101
+  },
+  "mos2_ecf_erg_cm2_per_count": 1.1853292770569212e-11,
+  "mos2_ecf_sigma_ln": 0.09594655763290505,
+  "mean_photon_energy_eV": 501.55168353682575,
+  "regions": {
+    "inner": {
+      "surface_brightness_erg_cm2_s_arcmin2": 2.7303156358056787e-14,
+      "flux_erg_cm2_s": 3.2618476763759913e-12,
+      "luminosity_erg_s": 3.251033307100501e+16,
+      "full_solid_angle_arcmin2": 119.46778729901185,
+      "live_solid_angle_arcmin2": 115.13310352947641,
+      "cx_norm_per_arcmin2": 0.013734420897878645,
+      "flux_1sigma_erg_cm2_s": [
+        3.237254113835407e-12,
+        3.2832238428185997e-12
+      ],
+      "luminosity_1sigma_erg_s": [
+        3.2265212823549028e+16,
+        3.272338602742097e+16
+      ],
+      "mos2_equivalent_surface_brightness_ct_s_arcmin2": 0.002303423773168614
+    },
+    "outer": {
+      "surface_brightness_erg_cm2_s_arcmin2": 6.371568686628498e-15,
+      "flux_erg_cm2_s": 1.112048520986381e-12,
+      "luminosity_erg_s": 1.1083616218569982e+16,
+      "full_solid_angle_arcmin2": 174.53292519943295,
+      "live_solid_angle_arcmin2": 168.3317694475606,
+      "cx_norm_per_arcmin2": 0.003205118474056446,
+      "flux_1sigma_erg_cm2_s": [
+        1.070701494056759e-12,
+        1.1527775174430827e-12
+      ],
+      "luminosity_1sigma_erg_s": [
+        1.0671516773610222e+16,
+        1.148955584905766e+16
+      ],
+      "mos2_equivalent_surface_brightness_ct_s_arcmin2": 0.0005353254236195487,
+      "image_response_ratio_to_inner": 0.995888027858511
+    }
+  },
+  "checks": {
+    "pn_only": {
+      "chi2": 438.6986904291966,
+      "dof": 257,
+      "inner_luminosity_erg_s": 3.243352963546436e+16
+    },
+    "inner_only": {
+      "chi2": 437.1162818900648,
+      "dof": 345,
+      "inner_luminosity_erg_s": 2.5469266296007516e+16
+    }
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "analysis_date": "2026-08-29",
+  "odf": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/ODF",
+  "pps": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/PPS",
+  "mt_pps": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/MT_PPS",
+  "summary": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Cambridge/X3I/analysis_xmm3i_final/reduction/inputs/4759_0963720201_SCX00000SUM.SAS",
+  "sas": "/home/scabot/Programs/sas/xmmsas_22.1.0-a8f2c2afa-20250304/setsas.sh",
+  "ccf": "/home/scabot/Programs/sas/ccf",
+  "headas": "/home/scabot/Programs/heasoft/heasoft-6.36/x86_64-pc-linux-gnu-libc2.39",
+  "python_lib": "/home/scabot/miniconda3/envs/xmm/lib",
+  "esas": "/home/scabot/Programs/xmm-esas-data",
+  "atomdb": "/home/scabot/atomdb",
+  "bands": {
+    "soft": {
+      "pn": {"pattern": 0},
+      "mos": {"pattern": 12}
+    },
+    "hard": {
+      "pn": {"pattern": 4},
+      "mos": {"pattern": 12}
+    }
+  },
+  "espfilt": {
+    "smooth": 51,
+    "rangescale_mos": 6,
+    "rangescale_pn": 15,
+    "allowsigma": 3
+  },
+  "frame_cut": {
+    "soft_events": 500,
+    "ontime_s": 500
+  },
+  "expected_frames": [
+    "mos1-s001-p01", "mos1-s001-p02", "mos1-s001-p03", "mos1-s001-p04",
+    "mos1-s001-p05", "mos1-s001-p06", "mos1-u009-p11",
+    "mos2-s002-p01", "mos2-s002-p02", "mos2-s002-p03", "mos2-s002-p04",
+    "mos2-s002-p05", "mos2-s002-p06", "mos2-u009-p11",
+    "pn-s003-p01", "pn-s003-p02", "pn-s003-p03", "pn-s003-p04",
+    "pn-s003-p05", "pn-s003-p08", "pn-s003-p10", "pn-s003-p11"
+  ],
+  "excluded_exposures": [
+    {"exposure": "pn-u027", "det": "pn", "decision": "no finite espfilt GTI"}
+  ],
+  "comove": {
+    "cadence_s": 60,
+    "pixel_arcsec": 4,
+    "map_step_s": 5
+  }
+}

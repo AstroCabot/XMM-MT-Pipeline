@@ -1,0 +1,71 @@
+{
+  "target": "C/2025 N1",
+  "obsid": "0963720201",
+  "soft_band_ev": [350, 1100],
+  "hard_band_ev": [2500, 8500],
+  "source_mask_radius_arcsec": 45,
+  "science_aperture_radius_arcsec": 370,
+  "matched_apertures_km": [120000, 135000],
+  "pps_background_annulus_arcsec": [600, 720],
+  "spectrum_outer_annulus_arcsec": [400, 600],
+  "lightcurve_background_annulus_arcsec": [480, 720],
+  "profile_fit_arcmin": [0.75, 12],
+  "profile_bin_width_arcmin": 0.25,
+  "chemistry_annulus_edges_arcsec": [0, 15, 30, 45, 75, 135, 240, 360, 480, 600, 720],
+  "display_exposure_floor_fraction": 0.10,
+  "pn_gap_local_ratio": 0.85,
+  "pn_gap_box_pixels": 41,
+  "pn_oot_fraction": 0.063,
+  "spherex": {
+    "reference_distance_au": 2.0699,
+    "reference_epoch_utc": "2025-12-11T12:00:00",
+    "parent_priors": {
+      "H2O": {
+        "reference_rate_s-1": {"median": 1.40e28, "sigma_ln": 0.1986901103},
+        "beta": {"mean": 3.3, "sigma": 0.3}
+      },
+      "CO2": {
+        "reference_rate_s-1": {"median": 3.00e27, "sigma_ln": 0.1494431202},
+        "beta": {"mean": 0.392, "sigma": 0.699}
+      },
+      "CO": {
+        "reference_rate_s-1": {"median": 7.60e27, "sigma_ln": 0.1961487814},
+        "beta": {"mean": 1.300, "sigma": 1.011}
+      }
+    }
+  },
+  "heavy_ion_prior": {
+    "distribution": "zero-truncated normal",
+    "location": 1.0e5,
+    "scale": 3.8e4,
+    "lower": 0,
+    "contemporaneous": false,
+    "units": "cm^-2 s^-1"
+  },
+  "ion_fraction_context": {
+    "units": "dimensionless",
+    "contemporaneous": false,
+    "schwadron_cravens": {
+      "principal_transition_energy_gt_eV": {
+        "200": {"slow": 7.646e-4, "fast": 6.329e-4},
+        "50": {"slow": 1.282e-3, "fast": 1.375e-3}
+      }
+    },
+    "ace_swics": {
+      "dataset": "ACE/SWICS 2.0 AC_H3_SW2 v04 two-hour",
+      "window_utc": ["2025-01-01T00:46:42", "2025-03-16T22:40:10"],
+      "records": {"all": 888, "retained": 370},
+      "o_h_scatter_fwhm_dex": 0.501,
+      "f_16_50_84": [1.386e-4, 2.491e-4, 4.395e-4]
+    },
+    "solar_orbiter_his": {
+      "dataset": "Solar Orbiter SWA/HIS L3 V04 ten-minute",
+      "window_utc": ["2023-04-01T00:00:02", "2023-04-27T14:10:15"],
+      "records": {"all": 2802, "retained": 2441},
+      "includes_sub_200_eV_charge_states": true,
+      "f_16_50_84": [4.694e-4, 6.053e-4, 9.664e-4]
+    },
+    "adopted_range": [3e-4, 1e-3]
+  },
+  "h2_single_capture_cross_section_cm2": 4.24e-15
+}

@@ -1,0 +1,8 @@
+* text=auto
+*.fits binary
+*.FTZ binary
+*.rmf binary
+*.npz binary
+*.pdf binary
+*.png binary
+*.tsv whitespace=-blank-at-eol

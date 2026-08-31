@@ -1,0 +1,25 @@
+{
+  "band_eV": [
+    350,
+    1100
+  ],
+  "midpoint_utc": "2025-12-03T18:59:16.860",
+  "sun_position_angle_deg": 113.51,
+  "motion_position_angle_deg": 289.90867,
+  "km_per_arcmin": 81920.5,
+  "detector_exposure_weights": {
+    "pn": 6.420645491506622,
+    "mos1": 1.1541234808739127,
+    "mos2": 1.0
+  },
+  "display_exposure_floor_fraction": 0.1,
+  "contour_seed_radius_arcmin": 0.75,
+  "contour_surface_brightness": [
+    0.002,
+    0.004,
+    0.007,
+    0.012,
+    0.02
+  ],
+  "lowest_contour_extent_arcmin": 6.052364092741809
+}

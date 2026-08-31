@@ -1,0 +1,91 @@
+{
+  "epoch_utc": "2025-12-03T21:25:46.398",
+  "distance_au": 1.8815323353,
+  "selection": {
+    "energy_eV": [
+      350,
+      1100
+    ],
+    "aperture_arcsec": 370.0,
+    "background_arcsec": [
+      600.0,
+      720.0
+    ],
+    "event_filter": "exact CCD GTIs; RAWY>12; PATTERN<=4; FLAG==0",
+    "source_mask_radius_arcsec": 45
+  },
+  "response": {
+    "arf": "response.arf",
+    "arf_model": "flat extended source",
+    "rmf": "calibration/epn_e4_ff20_sdY9_v22.0.rmf"
+  },
+  "bands": [
+    {
+      "energy_eV": [
+        350,
+        500
+      ],
+      "source_counts": 21269,
+      "background_counts": 5238,
+      "background_scale": 1.5581448930424946,
+      "source_exposure_s_arcmin2": 2481037.5983835934,
+      "background_exposure_s_arcmin2": 1592089.6085716523,
+      "raw_masked_flux_erg_cm-2_s-1": 7.372387549730961e-13,
+      "annulus_self_subtraction_factor_1_over_r": 1.3692031419668764,
+      "source_mask_fill_factor_1_over_r": 1.0358068318589542
+    },
+    {
+      "energy_eV": [
+        500,
+        1000
+      ],
+      "source_counts": 30642,
+      "background_counts": 8670,
+      "background_scale": 1.55936936735194,
+      "source_exposure_s_arcmin2": 2480494.774142943,
+      "background_exposure_s_arcmin2": 1590491.3826280183,
+      "raw_masked_flux_erg_cm-2_s-1": 1.3417584670660156e-12,
+      "annulus_self_subtraction_factor_1_over_r": 1.3691727976708563,
+      "source_mask_fill_factor_1_over_r": 1.03580768250367
+    },
+    {
+      "energy_eV": [
+        1000,
+        1100
+      ],
+      "source_counts": 681,
+      "background_counts": 537,
+      "background_scale": 1.5701018285244066,
+      "source_exposure_s_arcmin2": 2541225.1470490615,
+      "background_exposure_s_arcmin2": 1618293.6407169332,
+      "raw_masked_flux_erg_cm-2_s-1": 2.9245268468422142e-15,
+      "annulus_self_subtraction_factor_1_over_r": 1.3709812128046903,
+      "source_mask_fill_factor_1_over_r": 1.0358587421302718
+    }
+  ],
+  "flux_luminosity": {
+    "raw_masked": {
+      "flux_erg_cm-2_s-1": 2.081921748885954e-12,
+      "luminosity_erg_s": 2.072757345481205e+16
+    },
+    "annulus_self_subtraction_corrected_masked": {
+      "flux_erg_cm-2_s-1": 2.8505382852036112e-12,
+      "luminosity_erg_s": 2.8379905115996e+16
+    },
+    "full_aperture": {
+      "flux_erg_cm-2_s-1": 2.9526088011408763e-12,
+      "luminosity_erg_s": 2.939611723722118e+16
+    }
+  },
+  "correction_factors": {
+    "annulus_self_subtraction_exposure_weighted_1_over_r": 1.3691860833525311,
+    "source_mask_fill_1_over_r": 1.0358074530930126,
+    "raw_masked_to_full_aperture_1_over_r": 1.4182131498077826
+  },
+  "units": {
+    "counts": "count",
+    "background_scale": "dimensionless",
+    "flux": "erg cm-2 s-1",
+    "luminosity": "erg s-1"
+  }
+}

@@ -1,0 +1,143 @@
+{
+  "heliocentric_distance_au": 1.8687957011831113,
+  "observer_distance_au": 1.8825587020162007,
+  "parent_rates": {
+    "reference_distance_au": 2.0699,
+    "reference_epoch_utc": "2025-12-11T12:00:00",
+    "reference_sum_s-1": 2.46e+28,
+    "xmm_s-1": {
+      "H2O": 1.9615840046145475e+28,
+      "CO2": 3.1226346151826403e+27,
+      "CO": 8.679953364989955e+27
+    },
+    "xmm_sum_s-1": 3.141842802631807e+28
+  },
+  "cabot_baseline": {
+    "proton_density_1au_cm-3": 7.0,
+    "solar_wind_speed_cm_s": 40000000.0,
+    "heavy_ion_fraction": 0.001,
+    "photons_per_ion": 1.0,
+    "photon_energy_eV": 550.0,
+    "cross_section_cm2": 3e-15,
+    "neutral_scale_length_cm": 50000000000.0,
+    "kappa": 8.1
+  },
+  "heavy_ion": {
+    "cabot_number_flux_cm-2_s-1": 80174.1526276207,
+    "cabot_energy_flux_erg_cm-2_s-1": 7.064923469489796e-05,
+    "task06_prior_location_cm-2_s-1": 100000.0,
+    "task06_prior_scale_cm-2_s-1": 38000.0,
+    "task06_contemporaneous": false,
+    "task06_energy_eV": 501.55168353682575
+  },
+  "empirical_scaling": {
+    "coefficient_s2_cm2": 1e-38,
+    "aperture_scope": [
+      "120000_km",
+      "135000_km"
+    ]
+  },
+  "end_member_assumptions": {
+    "nucleus_radius_km": 1.3,
+    "outflow_speed_km_s": 0.37,
+    "comparison_scope": "total B12 model versus 370-arcsec measurement"
+  },
+  "apertures": {
+    "120000_km": {
+      "method": "Wegmann Eq. 30 approximate Hyakutake-scale",
+      "radius_arcsec": 87.88857310189125,
+      "radius_km": 120000.0,
+      "measured_luminosity_erg_s": 7854716063841441.0,
+      "inferred_production_rate_s-1": 1.0544148516452363e+29,
+      "task06_prior_inferred_rate_s-1": 9.88671925780543e+28,
+      "xmm_parent_rate_s-1": 3.141842802631807e+28,
+      "missing_rate_s-1": 7.4023057138205555e+28,
+      "missing_fraction": 0.7020297278884594
+    },
+    "135000_km": {
+      "method": "Wegmann Eq. 30 approximate Hyakutake-scale",
+      "radius_arcsec": 98.8746431501766,
+      "radius_km": 135000.0,
+      "measured_luminosity_erg_s": 9038491143223348.0,
+      "inferred_production_rate_s-1": 1.1310823813847452e+29,
+      "task06_prior_inferred_rate_s-1": 1.060559223416882e+29,
+      "xmm_parent_rate_s-1": 3.141842802631807e+28,
+      "missing_rate_s-1": 8.168981011215645e+28,
+      "missing_fraction": 0.7222268815835184
+    },
+    "370_arcsec": {
+      "method": "Cabot B2-B7/B11-B12; v=1 km s-1",
+      "radius_arcsec": 370.0,
+      "radius_km": 505185.63868738565,
+      "measured_luminosity_erg_s": 3.251033307100501e+16,
+      "inferred_production_rate_s-1": 2.1844932539277543e+29,
+      "task06_prior_inferred_rate_s-1": 2.0385874306466423e+29,
+      "xmm_parent_rate_s-1": 3.141842802631807e+28,
+      "missing_rate_s-1": 1.8703089736645735e+29,
+      "missing_fraction": 0.8561752114829047,
+      "required_heavy_ion_flux_multiple_for_xmm_parents": 41.78878861853971
+    }
+  },
+  "cabot_370_slow_speed_check": {
+    "speed_km_s": 0.37,
+    "inferred_production_rate_s-1": 8.082625039427958e+28,
+    "missing_rate_s-1": 4.94078223679615e+28,
+    "missing_fraction": 0.6112843553541648,
+    "required_heavy_ion_flux_multiple_for_xmm_parents": 6.008415000735995
+  },
+  "end_members": {
+    "H2O": {
+      "b8_production_rate_s-1": 1.2601778082280413e+28,
+      "b12_luminosity_erg_s": 911756360032287.0,
+      "observed_over_prediction": 35.65682072111211,
+      "prediction_over_observed": 0.02804512516192752,
+      "b8_over_xmm_measured_rate": 0.6424286725745743
+    },
+    "CO2": {
+      "b8_production_rate_s-1": 2.379729100606393e+28,
+      "b12_luminosity_erg_s": 3159655891614426.0,
+      "observed_over_prediction": 10.289200528856911,
+      "prediction_over_observed": 0.09718928085767378,
+      "b8_over_xmm_measured_rate": 7.620901558689742
+    },
+    "CO": {
+      "b8_production_rate_s-1": 8.555108825375317e+28,
+      "b12_luminosity_erg_s": 3.612662126083267e+16,
+      "observed_over_prediction": 0.8998996290375948,
+      "prediction_over_observed": 1.1112350397004367,
+      "b8_over_xmm_measured_rate": 9.856169112476813
+    },
+    "N2": {
+      "b8_production_rate_s-1": 9.27723988892917e+28,
+      "b12_luminosity_erg_s": 4.1968079292457976e+16,
+      "observed_over_prediction": 0.7746442920214219,
+      "prediction_over_observed": 1.2909150823154145
+    },
+    "H2": {
+      "b8_production_rate_s-1": 6.617305083101086e+29,
+      "b12_luminosity_erg_s": 1.1893734513524808e+18,
+      "observed_over_prediction": 0.02733399928679785,
+      "prediction_over_observed": 36.58447450399231
+    }
+  },
+  "n2_alternative": {
+    "aperture": "135000_km",
+    "missing_rate_s-1": 8.168981011215645e+28,
+    "xmm_CO_rate_s-1": 8.679953364989955e+27,
+    "Q_N2_over_Q_CO": 9.411319010266478
+  },
+  "h2_thin_check": {
+    "radius_arcmin": 6.0,
+    "radius_km": 491531.94466413965,
+    "surface_flux_erg_cm-2_s-1_arcmin-2": 1.6389164001513874e-14,
+    "cross_section_cm2": 4.24e-15,
+    "cabot_ion_number_flux_cm-2_s-1": 80174.1526276207,
+    "task03_mean_photon_energy_eV": 501.55168353682575,
+    "ion_energy_flux_erg_cm-2_s-1": 6.442589563966254e-05,
+    "optical_depth": 0.03777930514907676,
+    "production_rate_s-1": {
+      "1.0_km_s": 1.7518618233948715e+29,
+      "1.2_km_s": 2.102234188073846e+29
+    }
+  }
+}
