@@ -1,0 +1,9 @@
+numpy==2.3.5
+scipy==1.16.3
+astropy==7.1.1
+matplotlib==3.10.8
+emcee==3.1.6
+corner==2.3.0
+pyatomdb==1.2.0
+# ACX2 v2.5.1 is not on PyPI (tasks 01-06 only):
+# pip install git+https://github.com/AtomDB/ACX2.git@v2.5.1
