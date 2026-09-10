@@ -32,6 +32,19 @@ In a fresh virtual environment:
 About one minute on a normal desktop computer. HEASoft, SAS, and AtomDB
 (full pipeline only) install per their own documentation in one to two hours.
 
+## Demo
+
+`analysis_demo/` reruns stages 02–09 from a bundled ~11 MB data subset:
+
+    python analysis_demo/demo.py
+
+About seven minutes on a normal desktop computer; the spectral stage needs
+the HEASoft/PyXspec and AtomDB/ACX2 installations above, the rest only the
+pinned Python packages. Expected output: key statistics in
+`analysis_demo/outputs/results.json` and the figures in
+`analysis_demo/outputs/figures/`; see `analysis_demo/README.md` for the
+deviations from the full pipeline.
+
 ## Instructions for use
 
 Run the numbered tasks in order; later tasks read the earlier `outputs/`.
