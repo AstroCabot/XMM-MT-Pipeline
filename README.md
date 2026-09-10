@@ -32,16 +32,6 @@ In a fresh virtual environment:
 About one minute on a normal desktop computer. HEASoft, SAS, and AtomDB
 (full pipeline only) install per their own documentation in one to two hours.
 
-## Demo
-
-    python analysis_09_recoil/run.py
-
-Runs in under one second on a normal desktop computer from the committed demo
-inputs (the Task 08 posterior draws in `analysis_08_chemistry/outputs/`
-and `analysis_09_recoil/parameters.json`), and needs only NumPy and SciPy. Expected output:
-`analysis_09_recoil/outputs/result.json` is rewritten identical to the
-committed copy, so `git diff` stays clean.
-
 ## Instructions for use
 
 Run the numbered tasks in order; later tasks read the earlier `outputs/`.
