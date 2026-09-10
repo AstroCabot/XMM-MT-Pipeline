@@ -1,0 +1,77 @@
+{
+  "pps_luminosity": {
+    "epoch_utc": "2025-12-03T21:25:46.398",
+    "full_aperture_luminosity_erg_s": 2.939611723722118e+16
+  },
+  "spectrum_pn_only": {
+    "chi2": 438.69868195176,
+    "dof": 257,
+    "cx_temperature_keV": 0.17084794589523547,
+    "cx_collision_keV_u": 40.36355992410467,
+    "mean_photon_energy_eV": 500.98615843311654,
+    "inner_luminosity_erg_s": 3.2433999767250816e+16,
+    "inner_luminosity_1sigma_erg_s": [
+      3.1168177517174704e+16,
+      3.3796105207484084e+16
+    ]
+  },
+  "morphology": {
+    "lowest_contour_extent_arcmin": 5.96284793999938
+  },
+  "radial_profile": {
+    "slope": 1.0556105944056369,
+    "sector_standard_error": 0.02452062098860773,
+    "broken": {
+      "alpha_inner": 0.4608134570197764,
+      "alpha_outer": 1.0681461835634085,
+      "break_radius_arcmin": 0.8216386364397184
+    },
+    "luminosity_370_arcsec_erg_s": 3.624973698154244e+16
+  },
+  "solar_wind": {
+    "proton_flux_medians_cm-2_s-1": {
+      "stereo_a": 83402562.84279114,
+      "solar_orbiter": 140465416.49262998,
+      "wind": 60199306.7037241,
+      "ace_scaled": 55421610.62208469
+    },
+    "f107p_sfu": 175.7105
+  },
+  "scaling": {
+    "xmm_parent_rate_sum_s-1": 3.141842802631807e+28,
+    "cabot_370_missing_fraction": 0.610792605737848,
+    "n2_alternative_Q_N2_over_Q_CO": 9.34562239317623
+  },
+  "chemistry_posterior": {
+    "mean_acceptance_fraction": 0.12746527777777777,
+    "medians": {
+      "Q_H2O": 2.043050316714846e+28,
+      "Q_CO2": 3.377617463121337e+27,
+      "Q_CO": 8.962692887006878e+27,
+      "Q_H2": 5.840803961818668e+28,
+      "Q_total": 8.896013586310172e+28,
+      "H2_fraction": 0.6469577537968922
+    },
+    "H2_fraction_interval": [
+      0.000926415864484309,
+      0.7220003930268443
+    ]
+  },
+  "recoil": {
+    "radial_recoil_headline": "symmetric",
+    "oumuamua_H2_requirement_molecules_s": {
+      "at_1.25_au": 7.770666579018685e+25,
+      "at_xmm_distance": 3.4763005071639513e+25
+    },
+    "radiolytic_gas_erosion": {
+      "depth_m": [
+        1.28,
+        5.53
+      ],
+      "H2_molecules_s": [
+        6.309416251764957e+27,
+        7.245227478206115e+28
+      ]
+    }
+  }
+}
