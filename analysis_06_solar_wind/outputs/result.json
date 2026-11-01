@@ -7,22 +7,32 @@
     "units": "cm^-2 s^-1",
     "stereo_a": {
       "median": 83402562.84279114,
+      "min": 53033523.22020552,
+      "max": 189010171.77543715,
       "dynamic_range": 3.5639753932739877
     },
     "solar_orbiter": {
       "median": 140465416.49262998,
+      "min": 78901362.95864655,
+      "max": 317088094.07936454,
       "dynamic_range": 4.018791085339748
     },
     "ace": {
       "median": 32600947.4247557,
+      "min": 25367639.508261357,
+      "max": 77919113.84234574,
       "dynamic_range": 3.071594967161616
     },
     "wind": {
       "median": 60199306.7037241,
+      "min": 50672963.20357047,
+      "max": 131030616.86920536,
       "dynamic_range": 2.585809247878616
     },
     "ace_scaled": {
       "median": 55421610.62208469,
+      "min": 43124987.164044306,
+      "max": 132462493.53198776,
       "dynamic_range": 3.0715949671616154
     }
   },
@@ -39,35 +49,64 @@
     "speed_ace_over_wind": 0.9886269037979841
   },
   "f107": {
-    "f107p_sfu": 175.7105,
+    "f107p_sfu": 133.78478,
+    "f107_sfu": 124.74857,
+    "f107a_sfu": 142.82099,
     "units": "sfu",
-    "daily": {
-      "2025-12-03": {
-        "f107_sfu": 203.6,
-        "f107a_sfu": 142.94074,
-        "f107p_sfu": 173.27037
-      },
-      "2025-12-04": {
-        "f107_sfu": 213.6,
-        "f107a_sfu": 142.70123,
-        "f107p_sfu": 178.15062
-      }
-    },
-    "convention": "Penticton 20:00 UT flux adjusted to 1 au; F10.7A is the centred 81-day mean; F10.7P = (F10.7 + F10.7A)/2"
+    "rotation_lag_days": 5.711003629916955,
+    "earth_epoch_utc": "2025-11-28T06:04:09.786",
+    "convention": "Penticton 20:00 UT flux adjusted to 1 au, interpolated to the observation midpoint minus the solar-rotation lag between Earth and the comet; F10.7A is the centred 81-day mean; F10.7P = (F10.7 + F10.7A)/2"
   },
   "ion_fraction": {
     "adopted_range": [
-      0.0003,
-      0.001
-    ]
+      0.0001,
+      0.0005
+    ],
+    "ace_swics": {
+      "records": {
+        "all": 888,
+        "retained": 370
+      },
+      "input_sha256": "23bc5fe4209b56e0fea80ade5842cae4747567ad746580ef8882580383ecc391",
+      "f_16_50_84": [
+        0.00013859842563988472,
+        0.0002491939923126312,
+        0.00043964215720210356
+      ]
+    },
+    "solar_orbiter_his": {
+      "records": {
+        "all": 2802,
+        "retained": 2441
+      },
+      "input_sha256": "9a19ffc014b89e4e14a08c3e776192b9d53ca2cff380987430971090166252af",
+      "f_16_50_84": [
+        0.0001131345474261143,
+        0.00020197487884973954,
+        0.00035541371697600635
+      ]
+    },
+    "selected_emission": {
+      "band_eV": [
+        350,
+        1100
+      ],
+      "energy_step_eV": 0.5,
+      "cx_temperature_keV": 0.17125506632748755,
+      "cx_collision_keV_u": 38.929820630206436,
+      "cx_donor_helium_fraction": 0.09,
+      "acxmodel": 8,
+      "recombtype": 1,
+      "collntype": 1,
+      "energy_flux_fraction": 0.973119027192456
+    }
   },
   "heavy_ion_prior": {
-    "distribution": "zero-truncated normal",
-    "location": 100000.0,
-    "scale": 38000.0,
-    "lower": 0,
+    "distribution": "uniform",
     "contemporaneous": false,
-    "units": "cm^-2 s^-1"
+    "units": "cm^-2 s^-1",
+    "lower": 4312.4987164044305,
+    "upper": 158544.04703968228
   },
   "lightcurve": {
     "band_eV": [

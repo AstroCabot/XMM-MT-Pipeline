@@ -14,6 +14,7 @@ import diagnostic
 import figure
 import inference
 import numpy as np
+import prior_table
 import products
 import psf
 import psf_operator
@@ -1012,6 +1013,7 @@ with tempfile.TemporaryDirectory(dir=HERE) as folder:
     run.load_psf = lambda path, inputs, dependencies: calls.append("validate")
     run.corner_product = lambda: calls.append("corner")
     run.shutil.which = lambda name: "/sas/psfgen"
+    saved_water = products.OUTPUT, CONFIG["priors"]["beta_H2O"]
     try:
         preserved = [run.OUTPUT / name for name in ("chain.npz", "result.json")]
         for path in preserved:
@@ -1033,6 +1035,46 @@ with tempfile.TemporaryDirectory(dir=HERE) as folder:
         else:
             raise AssertionError("missing SAS accepted")
         assert calls == []
+        base = run.OUTPUT
+        for stage in ("all", "psf"):
+            sys.argv[:] = ["run.py", stage, "--water-prior", "frincke"]
+            try:
+                run.main()
+            except SystemExit as error:
+                assert error.code == 2
+            else:
+                raise AssertionError("Frincke prior accepted for the PSF stage")
+        assert run.OUTPUT == base and calls == []
+
+        def stop(path, inputs, dependencies):
+            calls.append(path)
+            raise InterruptedError
+
+        for path in preserved:
+            path.write_text("keep")
+        (base / "chain.pkl").touch()
+        sys.argv[:] = ["run.py", "fit"]
+        try:
+            run.main()
+        except SystemExit as error:
+            assert error.code == 2
+        else:
+            raise AssertionError("existing checkpoint accepted without --resume")
+        assert all(path.read_text() == "keep" for path in preserved)
+        (base / "chain.pkl").unlink()
+        run.load_psf = stop
+        sys.argv[:] = ["run.py", "fit", "--water-prior", "frincke"]
+        try:
+            run.main()
+        except InterruptedError:
+            pass
+        else:
+            raise AssertionError("fit did not reach the PSF")
+        assert calls == ["dependencies", base / "psf.npz"]
+        assert run.OUTPUT == products.OUTPUT == base / "water_frincke"
+        assert run.OUTPUT.is_dir()
+        assert CONFIG["priors"]["beta_H2O"] == [8.253, 0.56]
+        assert all(path.read_text() == "keep" for path in preserved)
     finally:
         (
             run.OUTPUT,
@@ -1044,6 +1086,7 @@ with tempfile.TemporaryDirectory(dir=HERE) as folder:
             run.shutil.which,
             arguments,
         ) = saved
+        products.OUTPUT, CONFIG["priors"]["beta_H2O"] = saved_water
         sys.argv[:] = arguments
 
 with tempfile.TemporaryDirectory(dir=HERE) as folder:
@@ -1113,21 +1156,39 @@ posterior = inference.Posterior(
     500,
     0.05,
     0.4,
-    1e5,
-    3.8e4,
+    2e3,
+    1.6e5,
 )
 assert math.isfinite(posterior.log_prior(theta))
 bad = theta.copy()
 bad[7] = 2
 assert posterior.log_prior(bad) == -math.inf
+moved = theta.copy()
+moved[8] = 1.5e5
+close(posterior.log_prior(moved), posterior.log_prior(theta), relative=1e-12)
+for value in (1e3, 2e5):
+    moved[8] = value
+    assert posterior.log_prior(moved) == -math.inf
 walkers = inference.draw_walkers(
     posterior, CONFIG["mcmc"]["walkers"], np.random.default_rng(CONFIG["mcmc"]["seed"])
 )
+initial_flux = walkers[:, inference.COORDS.index("phi_heavy")]
+assert np.all((initial_flux >= 2e3) & (initial_flux <= 1.6e5))
 initial_ratio = walkers[:, inference.COORDS.index("log10_H2_ratio")]
 assert np.any(initial_ratio <= -1.5) and np.any(initial_ratio >= -0.5)
 mode_chain = inference.run_sampler(posterior, walkers, 20, 40, 1, seed=10)[0]
 retained_ratio = mode_chain[:, :, inference.COORDS.index("log10_H2_ratio")]
 assert np.any(retained_ratio <= -1.5) and np.any(retained_ratio >= -0.5)
+with tempfile.TemporaryDirectory(dir=HERE) as folder:
+    path = Path(folder) / "chain.pkl"
+    arguments = (posterior, walkers, 5)
+    first = inference.run_sampler(*arguments, 110, 1, 10, path)
+    resumed = inference.run_sampler(*arguments, 230, 1, 10, path)
+    whole = inference.run_sampler(*arguments, 230, 1, 10)
+    assert path.is_file() and not path.with_suffix(".tmp").exists()
+    assert np.array_equal(first[0], resumed[0][:110])
+    for left, right in zip(resumed, whole, strict=True):
+        assert np.array_equal(left, right)
 prediction, variance, model, _, _, physical = posterior.predict(theta)
 assert np.allclose(model, [1, 2])
 assert np.allclose(prediction, [1.3, 2.4])
@@ -1203,7 +1264,11 @@ with tempfile.TemporaryDirectory(dir=HERE) as folder:
         json.dumps(
             {
                 "f107": {"f107p_sfu": 175.25},
-                "heavy_ion_prior": run.SHARED["heavy_ion_prior"],
+                "heavy_ion_prior": {
+                    **run.SHARED["heavy_ion_prior"],
+                    "lower": 2e3,
+                    "upper": 1.6e5,
+                },
             }
         )
     )
@@ -1479,3 +1544,26 @@ for sigma in (0.05, 0.20):
     )
     assert effective < len(draws)
 assert checks["sigma_0.05"]["Q_H2_median_s-1"] < checks["sigma_0.20"]["Q_H2_median_s-1"]
+published = prior_table.photochemistry(175.7105)
+for name, value in (
+    ("H2O", 6.212e4),
+    ("OH", 6.475e4),
+    ("CO2", 2.183e5),
+    ("CO", 5.829e5),
+    ("H2", 3.149e6),
+    ("O", 1.731e6),
+    ("C", 7.933e5),
+    ("H", 8.141e6),
+    ("O2", 2.086e5),
+):
+    close(published["lifetime_s"][name], value, relative=2e-4)
+for name, value in (
+    ("CO_to_C_O", 0.4015),
+    ("CO2_to_CO_O", 0.5850),
+    ("H2O_oxygen", 0.1677),
+    ("H2O_H2_split", 0.4286),
+    ("H2O_ionization", 0.0591),
+    ("OH_to_O_H", 0.9667),
+    ("H2_to_H", 1.056),
+):
+    close(published["branching"][name], value, relative=1e-3)

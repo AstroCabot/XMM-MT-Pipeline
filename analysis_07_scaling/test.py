@@ -78,7 +78,9 @@ def fixtures():
         "mos2_ecf_erg_cm2_per_count": 8.672299198621948e-12,
         "regions": {"inner": {"luminosity_erg_s": 3.0e16}},
     }
-    task6 = {"heavy_ion_prior": SHARED["heavy_ion_prior"]}
+    task6 = {
+        "heavy_ion_prior": {**SHARED["heavy_ion_prior"], "lower": 2e3, "upper": 1.6e5}
+    }
     return task5, task3, task6
 
 
@@ -124,7 +126,7 @@ def test_paper_calculation():
     result, rows = calculate(task5, task3, task6)
     _, reference, xmm = parent_rates(task3["heliocentric_distance_au"])
     close(reference, 2.46e28)
-    close(xmm, 3.1418250350221415e28)
+    close(xmm, 3.156043338888213e28)
     close(
         result["apertures"][MATCHED_NAMES[0]]["inferred_production_rate_s-1"],
         9.313365487643337e28,
@@ -175,7 +177,7 @@ def test_paper_calculation():
     assert 9 < end["CO2"]["observed_over_prediction"] < 10
     assert 38 < end["H2"]["prediction_over_observed"] < 40
     assert 9 < end["CO"]["b8_over_xmm_measured_rate"] < 11
-    close(result["n2_alternative"]["Q_N2_over_Q_CO"], 7.89434563374471)
+    close(result["n2_alternative"]["Q_N2_over_Q_CO"], 8.09590215717307)
     thin = result["h2_thin_check"]
     rates = thin["production_rate_s-1"]
     close(rates["1.0_km_s"], 1.4618168793339194e29)

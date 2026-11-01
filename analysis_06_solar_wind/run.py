@@ -30,6 +30,16 @@ FINAL_PRODUCTS = (
 ION_FRACTION = SHARED["ion_fraction_context"]
 
 
+def heavy_ion_prior(stats):
+    low, high = ION_FRACTION["adopted_range"]
+    series = [values for name, values in stats.items() if name != "ace"]
+    return {
+        **SHARED["heavy_ion_prior"],
+        "lower": low * min(values["min"] for values in series),
+        "upper": high * max(values["max"] for values in series),
+    }
+
+
 def summarize(wind, rows, band_ev, pattern):
     rates = np.array([float(row["rate_ct_s"]) for row in rows])
     if np.any(~np.isfinite(rates)) or rates.min() <= 0:
@@ -40,7 +50,7 @@ def summarize(wind, rows, band_ev, pattern):
         "ace_quality": wind["ace_quality"],
         "f107": wind["f107"],
         "ion_fraction": {"adopted_range": ION_FRACTION["adopted_range"]},
-        "heavy_ion_prior": SHARED["heavy_ion_prior"],
+        "heavy_ion_prior": heavy_ion_prior(wind["stats"]),
         "lightcurve": {
             "band_eV": list(band_ev),
             "pattern": pattern,
@@ -66,10 +76,12 @@ def main():
     if args.wind_only:
         return
 
+    import ion_fraction
     import lightcurve
 
     rows = lightcurve.build(lightcurve.pn_frames())
     result = summarize(wind, rows, lightcurve.BAND_EV, lightcurve.PATTERN)
+    result["ion_fraction"].update(ion_fraction.calculate())
     solar_wind.OUTPUT.mkdir(parents=True, exist_ok=True)
     (solar_wind.OUTPUT / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     from figure import draw

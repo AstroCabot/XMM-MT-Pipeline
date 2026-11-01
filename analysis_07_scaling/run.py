@@ -95,10 +95,9 @@ def calculate(task5, task3, task6):
     r_au = float(task3["heliocentric_distance_au"])
     distance = float(task3["distance_au"])
     mean_energy = float(task3["mean_photon_energy_eV"])
-    task6_prior = SHARED["heavy_ion_prior"]
-    if task6["heavy_ion_prior"] != task6_prior:
-        raise RuntimeError("Task 06 heavy-ion prior differs from shared parameters")
-    task6_phi = float(task6_prior["location"])
+    task6_prior = task6["heavy_ion_prior"]
+    task6_bounds = [float(task6_prior["lower"]), float(task6_prior["upper"])]
+    task6_phi = sum(task6_bounds) / 2
     task6_h = ion_energy_flux(task6_phi, mean_energy)
     cabot_phi = ion_number_flux_cm2_s(r_au)
     cabot_h = cabot_energy_flux(r_au)
@@ -223,8 +222,8 @@ def calculate(task5, task3, task6):
         "heavy_ion": {
             "cabot_number_flux_cm-2_s-1": cabot_phi,
             "cabot_energy_flux_erg_cm-2_s-1": cabot_h,
-            "task06_prior_location_cm-2_s-1": task6_phi,
-            "task06_prior_scale_cm-2_s-1": float(task6_prior["scale"]),
+            "task06_prior_midpoint_cm-2_s-1": task6_phi,
+            "task06_prior_bounds_cm-2_s-1": task6_bounds,
             "task06_contemporaneous": bool(task6_prior["contemporaneous"]),
             "task06_energy_eV": mean_energy,
         },

@@ -88,9 +88,7 @@ def load_inputs():
     data = (events - qpb - sp - SHARED["pn_oot_fraction"] * oot) / exposure
     data -= background["mean_ct_s_arcmin2"]
     error = np.sqrt(events + qpb + sp + SHARED["pn_oot_fraction"] ** 2 * oot) / exposure
-    heavy = SHARED["heavy_ion_prior"]
-    if wind["heavy_ion_prior"] != heavy:
-        raise RuntimeError("Task 06 heavy-ion prior differs from shared parameters")
+    heavy = wind["heavy_ion_prior"]
     return {
         "rows": rows,
         "edges": edges,
@@ -154,8 +152,8 @@ def build_model(inputs, operator):
         spectrum["mean_photon_energy_eV"],
         spectrum["mos2_ecf_sigma_ln"],
         inputs["background"]["sigma_ct_s_arcmin2"],
-        heavy["location"],
-        heavy["scale"],
+        heavy["lower"],
+        heavy["upper"],
     )
     return posterior, rows
 
@@ -405,12 +403,30 @@ def load_psf(path, inputs, dependencies):
         return operator
 
 
+def select_water_prior(name):
+    global OUTPUT
+    if name == "frincke":
+        beta = SHARED["spherex"]["parent_priors"]["H2O"]["beta_steep"]
+        CONFIG["priors"]["beta_H2O"] = [beta["mean"], beta["sigma"]]
+        OUTPUT = products.OUTPUT = OUTPUT / "water_frincke"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "stage", choices=("all", "psf", "fit", "corner"), nargs="?", default="all"
     )
+    parser.add_argument("--water-prior", choices=("tan", "frincke"), default="tan")
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--retained-steps", type=int)
     args = parser.parse_args()
+    if args.water_prior == "frincke" and args.stage not in ("fit", "corner"):
+        parser.error("the Frincke water prior shares the PSF; use fit or corner")
+    psf = OUTPUT / "psf.npz"
+    select_water_prior(args.water_prior)
+    checkpoint = OUTPUT / "chain.pkl"
+    if args.stage in ("all", "fit") and checkpoint.exists() and not args.resume:
+        parser.error("chain.pkl exists; use --resume or remove it")
     OUTPUT.mkdir(parents=True, exist_ok=True)
     if args.stage == "corner":
         corner_product()
@@ -418,13 +434,13 @@ def main():
     for name in products.FINAL_PRODUCTS:
         (OUTPUT / name).unlink(missing_ok=True)
     if args.stage in ("all", "psf"):
-        (OUTPUT / "psf.npz").unlink(missing_ok=True)
+        psf.unlink(missing_ok=True)
     inputs = load_inputs()
     if args.stage in ("all", "psf"):
         if shutil.which("psfgen") is None:
             raise RuntimeError("source SAS before psf")
         psf_product(inputs)
-    operator = load_psf(OUTPUT / "psf.npz", inputs, psf_dependencies())
+    operator = load_psf(psf, inputs, psf_dependencies())
     if args.stage == "psf":
         return
     posterior, reactions = build_model(inputs, operator)
@@ -435,9 +451,10 @@ def main():
         posterior,
         start,
         settings["burn_steps"],
-        settings["retained_steps"],
+        args.retained_steps or settings["retained_steps"],
         settings["processes"],
         settings["seed"],
+        checkpoint,
     )
     products.write(inputs, posterior, reactions, chain, logp, logl, acceptance)
 

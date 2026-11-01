@@ -22,23 +22,21 @@
     "parent_priors": {
       "H2O": {
         "reference_rate_s-1": {"median": 1.40e28, "sigma_ln": 0.1986901103},
-        "beta": {"mean": 3.3, "sigma": 0.3}
+        "beta": {"mean": 3.3, "sigma": 0.3},
+        "beta_steep": {"mean": 8.253, "sigma": 0.560}
       },
       "CO2": {
         "reference_rate_s-1": {"median": 3.00e27, "sigma_ln": 0.1494431202},
-        "beta": {"mean": 0.392, "sigma": 0.699}
+        "beta": {"mean": 1.504, "sigma": 0.826}
       },
       "CO": {
         "reference_rate_s-1": {"median": 7.60e27, "sigma_ln": 0.1961487814},
-        "beta": {"mean": 1.300, "sigma": 1.011}
+        "beta": {"mean": 1.033, "sigma": 0.604}
       }
     }
   },
   "heavy_ion_prior": {
-    "distribution": "zero-truncated normal",
-    "location": 1.0e5,
-    "scale": 3.8e4,
-    "lower": 0,
+    "distribution": "uniform",
     "contemporaneous": false,
     "units": "cm^-2 s^-1"
   },
@@ -51,21 +49,21 @@
         "50": {"slow": 1.282e-3, "fast": 1.375e-3}
       }
     },
+    "selected_incident_charges_by_Z": {"6": [5, 6], "7": [6, 7], "8": [7, 8], "10": [9], "12": [11]},
+    "o_h_scatter_fwhm_dex": 0.501,
     "ace_swics": {
       "dataset": "ACE/SWICS 2.0 AC_H3_SW2 v04 two-hour",
       "window_utc": ["2025-01-01T00:46:42", "2025-03-16T22:40:10"],
       "records": {"all": 888, "retained": 370},
-      "o_h_scatter_fwhm_dex": 0.501,
-      "f_16_50_84": [1.386e-4, 2.491e-4, 4.395e-4]
+      "f_16_50_84": [1.386e-4, 2.492e-4, 4.396e-4]
     },
     "solar_orbiter_his": {
       "dataset": "Solar Orbiter SWA/HIS L3 V04 ten-minute",
       "window_utc": ["2023-04-01T00:00:02", "2023-04-27T14:10:15"],
       "records": {"all": 2802, "retained": 2441},
-      "includes_sub_200_eV_charge_states": true,
-      "f_16_50_84": [4.694e-4, 6.053e-4, 9.664e-4]
+      "f_16_50_84": [1.131e-4, 2.020e-4, 3.554e-4]
     },
-    "adopted_range": [3e-4, 1e-3]
+    "adopted_range": [1e-4, 5e-4]
   },
   "h2_single_capture_cross_section_cm2": 4.24e-15
 }

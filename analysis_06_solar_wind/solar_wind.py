@@ -225,9 +225,21 @@ def smooth_segments(mapped, grid):
     return smooth
 
 
-def f107():
-    """Penticton 20:00 UT flux adjusted to 1 au, with the centred 81-day mean
-    F10.7A and the Moore & Mapaye proxy F10.7P = (F10.7 + F10.7A)/2."""
+def rotation_lag_days(comet, earth, mjd):
+    lag = 0.0
+    for _ in range(100):
+        offset = wrap180(at(comet, mjd)[0] - at(earth, mjd - lag)[0])
+        updated = float(offset) / OMEGA_DEG_DAY
+        if abs(updated - lag) < 1e-8:
+            return updated
+        lag = updated
+    raise RuntimeError("solar-rotation lag did not converge")
+
+
+def f107(tracks):
+    """Penticton 20:00 UT flux adjusted to 1 au and shifted to the comet's solar
+    longitude, with the centred 81-day mean F10.7A and the Moore & Mapaye proxy
+    F10.7P = (F10.7 + F10.7A)/2."""
     path = CACHE / "penticton_f107.tsv"
     if not path.exists():
         wanted = set()
@@ -261,7 +273,7 @@ def f107():
         dt.date.fromisoformat(row["date"]): float(row["adjusted_flux_sfu"])
         for row in read_tsv(path)
     }
-    days = {}
+    averages = []
     for date in F107_DATES:
         day = dt.date.fromisoformat(date)
         window = [
@@ -270,18 +282,23 @@ def f107():
         ]
         if any(value is None for value in window):
             raise RuntimeError(f"incomplete 81-day F10.7 window for {date}")
-        average = float(np.mean(window))
-        days[date] = {
-            "f107_sfu": daily[day],
-            "f107a_sfu": round(average, 5),
-            "f107p_sfu": round(0.5 * (daily[day] + average), 5),
-        }
+        averages.append(float(np.mean(window)))
+    midpoint = float(np.mean(observation_window()))
+    lag = rotation_lag_days(tracks["comet"], tracks["wind"], midpoint)
+    epochs = sorted(daily)
+    measured = Time([f"{day}T20:00:00" for day in epochs], scale="utc").mjd
+    flux = float(np.interp(midpoint - lag, measured, [daily[e] for e in epochs]))
+    average = float(np.mean(averages))
     return {
-        "f107p_sfu": round(float(np.mean([d["f107p_sfu"] for d in days.values()])), 5),
+        "f107p_sfu": round(0.5 * (flux + average), 5),
+        "f107_sfu": round(flux, 5),
+        "f107a_sfu": round(average, 5),
         "units": "sfu",
-        "daily": days,
-        "convention": "Penticton 20:00 UT flux adjusted to 1 au; "
-        "F10.7A is the centred 81-day mean; F10.7P = (F10.7 + F10.7A)/2",
+        "rotation_lag_days": lag,
+        "earth_epoch_utc": Time(midpoint - lag, format="mjd", scale="utc").isot,
+        "convention": "Penticton 20:00 UT flux adjusted to 1 au, interpolated to "
+        "the observation midpoint minus the solar-rotation lag between Earth and "
+        "the comet; F10.7A is the centred 81-day mean; F10.7P = (F10.7 + F10.7A)/2",
     }
 
 
@@ -352,6 +369,8 @@ def products(output=OUTPUT):
             raise RuntimeError(f"no positive mapped flux inside the window for {name}")
         stats[name] = {
             "median": float(np.median(sample)),
+            "min": float(sample.min()),
+            "max": float(sample.max()),
             "dynamic_range": float(sample.max() / sample.min()),
         }
     return {
@@ -362,5 +381,5 @@ def products(output=OUTPUT):
         "curves": curves,
         "stats": stats,
         "ace_quality": ace_quality(series, mapped, window),
-        "f107": f107(),
+        "f107": f107(tracks),
     }

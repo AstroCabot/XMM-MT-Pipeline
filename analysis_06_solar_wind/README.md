@@ -8,7 +8,8 @@ export LD_LIBRARY_PATH=/home/scabot/miniconda3/envs/xmm/lib:${LD_LIBRARY_PATH:-}
 ```
 
 Inputs are the cached solar-wind series and the eight masked PN event and OoT
-files, GTIs, ephemeris, attitude, calibration index, and ODF summary.
+files, GTIs, ephemeris, attitude, calibration index, and ODF summary, plus the
+ACE/SWICS and Solar Orbiter/HIS composition CDFs and the Task 03 VACX2 fit.
 
 Outputs are `mapped_flux.tsv`, `lightcurve.tsv`, `result.json`, and Figure 4 as
 PNG and PDF.
@@ -31,11 +32,24 @@ window. ACE density uses a fixed factor of 1.7 relative to Wind; the unscaled
 series is omitted from the relative panel. The Parker panel uses the nearest
 STEREO-A hourly sample within the 1.5-hour gap limit.
 
-F10.7 is the Penticton 20:00 UT value adjusted to 1 au. `F10.7A` is its centered
-81-day mean and `F10.7P=(F10.7+F10.7A)/2`; Task 08 uses the mean F10.7P of the
-two observation dates. The adopted ion-fraction range is `3e-4--1e-3`, from
-Schwadron--Cravens, ACE/SWICS, and Solar Orbiter/HIS. The heavy-ion number-flux
-prior is the zero-truncated `N(1.0e5, 3.8e4)` cm^-2 s^-1 distribution.
+F10.7 is the Penticton 20:00 UT value adjusted to 1 au, interpolated to the
+observation midpoint minus the solar-rotation lag from Earth to the comet,
+`lag = wrap180(lambda_c(t)-lambda_E(t-lag))/14.1844` days, so that it describes
+the hemisphere facing the comet. `F10.7A` is the centered 81-day mean and
+`F10.7P=(F10.7+F10.7A)/2`; Task 08 reads F10.7P from `result.json`.
+
+`ion_fraction.py` tabulates C5+,6+, N6+,7+, O7+,8+, Ne9+, and Mg11+ relative to
+protons for ACE/SWICS and Solar Orbiter/HIS, using the same speed-dependent O/H,
+0.501-dex FWHM lognormal O/H scatter, reconstructed Ne9+, and tabulated N6+,7+.
+The 16th--84th percentiles are `(1.39--4.40)e-4` for ACE and `(1.13--3.55)e-4`
+for HIS; the adopted ion-fraction range is `1e-4--5e-4`. Its limits times the
+lowest and highest mapped proton flux across the monitors in the observation
+window, with ACE scaled by 1.7, give the bounds of the uniform heavy-ion
+number-flux prior, `4.3e3--1.6e5` cm^-2 s^-1, which Tasks 07 and 08 read from
+`result.json`. These ions supply 97.3% of the intrinsic 0.35--1.10 keV energy
+flux in the Task 03 VACX2 model. ACE CDFs come from SPDF and HIS V04 CDFs from
+SOAR; `result.json` records both input digests. HAPI cannot replace them because
+its CSV rounds the ratio floors and omits the HIS quality flag.
 
 The light curve selects 200--1000 eV PN singles (`PATTERN==0`, `FLAG==0`). The
 15 common 45-arcsec source holes apply to events, OoT events, and exposure. SAS

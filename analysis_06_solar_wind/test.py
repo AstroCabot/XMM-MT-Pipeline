@@ -6,6 +6,7 @@ from astropy.io import fits
 from astropy.time import Time
 from astropy.wcs import WCS
 
+import ion_fraction
 import lightcurve
 import run as analysis
 import solar_wind
@@ -76,21 +77,21 @@ def test_segment_smoothing():
 
 
 def test_f107_proxy():
-    values = solar_wind.f107()
-    daily = values["daily"]
-    assert set(daily) == set(solar_wind.F107_DATES)
-    for day in daily.values():
-        assert np.isclose(
-            day["f107p_sfu"], 0.5 * (day["f107_sfu"] + day["f107a_sfu"]), atol=1e-4
-        )
+    lag = solar_wind.rotation_lag_days(fixed_track(90, 2), fixed_track(0, 1), 5.0)
+    assert np.isclose(lag, 90 / solar_wind.OMEGA_DEG_DAY)
+    values = solar_wind.f107(
+        {name: solar_wind.track(name) for name in ("comet", "wind")}
+    )
     assert np.isclose(
         values["f107p_sfu"],
-        np.mean([day["f107p_sfu"] for day in daily.values()]),
+        0.5 * (values["f107_sfu"] + values["f107a_sfu"]),
         atol=1e-4,
     )
-    assert np.isclose(daily["2025-12-03"]["f107p_sfu"], 173.27037)
-    assert np.isclose(daily["2025-12-04"]["f107p_sfu"], 178.15062)
-    assert np.isclose(values["f107p_sfu"], 175.7105)
+    assert values["earth_epoch_utc"].startswith("2025-11-28T06")
+    assert np.isclose(values["rotation_lag_days"], 5.711, atol=1e-3)
+    assert np.isclose(values["f107_sfu"], 124.7, atol=0.05)
+    assert np.isclose(values["f107a_sfu"], 142.82, atol=0.01)
+    assert np.isclose(values["f107p_sfu"], 133.76, atol=0.05)
 
 
 def test_declared_series_regression():
@@ -108,6 +109,13 @@ def test_declared_series_regression():
     for name, (median, dynamic) in expected.items():
         assert np.isclose(stats[name]["median"], median, rtol=1e-9)
         assert np.isclose(stats[name]["dynamic_range"], dynamic, rtol=1e-9)
+    prior = analysis.heavy_ion_prior(stats)
+    assert np.allclose(
+        [prior["lower"], prior["upper"]],
+        [4.31250e3, 1.58544e5],
+        rtol=1e-5,
+        atol=0,
+    )
     assert solar_wind.EVAL_PAD_DAYS == 3
     limits = Time(PLOT_LIMITS_UTC, format="isot", scale="utc").mjd
     for name, values in result["curves"].items():
@@ -179,6 +187,8 @@ def test_ion_fraction():
         "units",
         "contemporaneous",
         "schwadron_cravens",
+        "selected_incident_charges_by_Z",
+        "o_h_scatter_fwhm_dex",
         "ace_swics",
         "solar_orbiter_his",
         "adopted_range",
@@ -233,13 +243,13 @@ def test_ion_fraction():
             "ACE/SWICS 2.0 AC_H3_SW2 v04 two-hour",
             ["2025-01-01T00:46:42", "2025-03-16T22:40:10"],
             {"all": 888, "retained": 370},
-            [1.386e-4, 2.491e-4, 4.395e-4],
+            [1.386e-4, 2.492e-4, 4.396e-4],
         ),
         "solar_orbiter_his": (
             "Solar Orbiter SWA/HIS L3 V04 ten-minute",
             ["2023-04-01T00:00:02", "2023-04-27T14:10:15"],
             {"all": 2802, "retained": 2441},
-            [4.694e-4, 6.053e-4, 9.664e-4],
+            [1.131e-4, 2.020e-4, 3.554e-4],
         ),
     }
     for name, (dataset, window, records, values) in expected.items():
@@ -247,9 +257,52 @@ def test_ion_fraction():
         assert ion[name]["window_utc"] == window and ion[name]["records"] == records
         assert np.array_equal(ion[name]["f_16_50_84"], values)
         assert np.all(np.diff(values) > 0)
-    assert ion["ace_swics"]["o_h_scatter_fwhm_dex"] == 0.501
-    assert ion["solar_orbiter_his"]["includes_sub_200_eV_charge_states"] is True
-    assert ion["adopted_range"] == [3e-4, 1e-3]
+    assert ion["o_h_scatter_fwhm_dex"] == 0.501
+    assert ion["adopted_range"] == [1e-4, 5e-4]
+
+
+def test_ion_fraction_calculation():
+    ace = {
+        "vHe2": np.array([450.0, 600.0, 450.0, 450.0, -1e31]),
+        "C6to5": np.ones(5),
+        "C6to5_qual": np.array([0, 0, 1, 0, 0]),
+        "O7to6": np.array([0.2, 0.2, 0.2, ion_fraction.O76_FLOOR, 0.2]),
+        "O7to6_qual": np.zeros(5),
+        "O8to6": np.full(5, 0.01),
+        "O8to6_qual": np.zeros(5),
+    }
+    assert np.allclose(
+        ion_fraction.ace_fractions(ace),
+        [2.694416778e-4, 3.589957071e-4],
+        rtol=1e-9,
+        atol=0,
+    )
+    his = {
+        "QUALITY_FLAG": np.array([0, 1]),
+        "HE2_SPEED": np.full(2, 450.0),
+        "C_O_ABUN": np.full(2, 0.6),
+        "MG_O_ABUN": np.full(2, 0.2),
+        "SI_O_ABUN": np.full(2, 0.1),
+        "FE_O_ABUN": np.full(2, 0.1),
+        "O_CHARGE_DIST": np.tile([0.0, 0.8, 0.15, 0.05], (2, 1)),
+        "C_CHARGE_DIST": np.tile([0.2, 0.5, 0.3], (2, 1)),
+        "MG_CHARGE_DIST": np.tile([0.0, 0.0, 0.1, 0.2, 0.3, 0.25, 0.15], (2, 1)),
+        "O7_O6_RATIO": np.full(2, 0.1875),
+    }
+    assert np.allclose(
+        ion_fraction.his_fractions(his), [2.811787378e-4], rtol=1e-9, atol=0
+    )
+    low, median, high = ion_fraction.percentiles(np.array([1.0]))
+    assert np.isclose(median, 1) and np.isclose(low * high, 1)
+    assert np.isclose(np.log10(high), 0.2116, atol=1e-4)
+    result = ion_fraction.calculate()
+    for name in ("ace_swics", "solar_orbiter_his"):
+        stored = analysis.ION_FRACTION[name]
+        assert result[name]["records"] == stored["records"]
+        assert [
+            float(f"{value:.4g}") for value in result[name]["f_16_50_84"]
+        ] == stored["f_16_50_84"]
+    assert round(result["selected_emission"]["energy_flux_fraction"], 3) == 0.973
 
 
 def test_lightcurve_equation():
@@ -483,7 +536,9 @@ def test_gti_exposure_cache_and_contract():
             lightcurve.WORK, lightcurve.REDUCTION, lightcurve.sas = original
 
         wind = {
-            "stats": {"wind": {"median": 6e7, "dynamic_range": 2.5}},
+            "stats": {
+                "wind": {"median": 6e7, "min": 4e7, "max": 1e8, "dynamic_range": 2.5}
+            },
             "ace_quality": {"source_samples": 2},
             "f107": {"f107p_sfu": 175.7105},
         }
@@ -494,7 +549,9 @@ def test_gti_exposure_cache_and_contract():
             lightcurve.PATTERN,
         )
         assert result["lightcurve"]["dynamic_range"] == 2
-        assert result["heavy_ion_prior"] == analysis.SHARED["heavy_ion_prior"]
+        prior = result["heavy_ion_prior"]
+        assert prior["distribution"] == "uniform"
+        assert np.allclose([prior["lower"], prior["upper"]], [4e3, 5e4])
         assert result["ion_fraction"] == {
             "adopted_range": analysis.ION_FRACTION["adopted_range"]
         }
@@ -584,6 +641,7 @@ if __name__ == "__main__":
     test_declared_series_regression()
     test_parker_support()
     test_ion_fraction()
+    test_ion_fraction_calculation()
     test_lightcurve_equation()
     test_geometry()
     test_input_contracts()

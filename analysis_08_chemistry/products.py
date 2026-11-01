@@ -267,6 +267,7 @@ def write(inputs, posterior, reactions, chain, logp, logl, acceptance_fraction):
         "orbit": orbit_output(),
         "f107p_sfu": inputs["f107p"],
         "photons_per_captured_ion": CONFIG["photons_per_captured_ion"],
+        "beta_H2O_prior": CONFIG["priors"]["beta_H2O"],
         "mean_acceptance_fraction": float(acceptance_fraction),
         "background": {"model": "continuous broken-law B", **inputs["background"]},
         "posterior": summary,

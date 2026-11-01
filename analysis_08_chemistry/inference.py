@@ -1,8 +1,12 @@
 import math
 import multiprocessing as mp
+import pickle
+from pathlib import Path
 
 import numpy as np
 from scipy.special import ndtr
+
+CHECKPOINT_STEPS = 100
 
 COORDS = (
     "ln_Qref_H2O",
@@ -112,8 +116,8 @@ class Posterior:
         photon_energy_ev,
         scale_sigma,
         offset_sigma,
-        heavy_location,
-        heavy_scale,
+        heavy_lower,
+        heavy_upper,
     ):
         self.data, self.error = np.asarray(data), np.asarray(error)
         self.ecf, self.transport, self.chains = ecf, transport, chains
@@ -124,7 +128,7 @@ class Posterior:
         }
         self.photon_energy_ev = photon_energy_ev
         self.scale_sigma, self.offset_sigma = scale_sigma, offset_sigma
-        self.heavy_location, self.heavy_scale = heavy_location, heavy_scale
+        self.heavy_lower, self.heavy_upper = heavy_lower, heavy_upper
         if self.data.shape != self.error.shape or self.psf.shape[0] != len(self.data):
             raise ValueError("profile and PSF dimensions differ")
 
@@ -143,9 +147,7 @@ class Posterior:
             result += normal_logpdf(v[f"beta_{name}"], *p[f"beta_{name}"])
         result += uniform_logpdf(v["beta_H2"], *p["beta_H2"])
         result += uniform_logpdf(v["log10_H2_ratio"], *p["log10_H2_ratio"])
-        result += positive_normal_logpdf(
-            v["phi_heavy"], self.heavy_location, self.heavy_scale
-        )
+        result += uniform_logpdf(v["phi_heavy"], self.heavy_lower, self.heavy_upper)
         result += sum(
             positive_normal_logpdf(v[f"v_{name}"], *p["parent_velocity"])
             for name in ("H2O", "CO2", "CO", "H2")
@@ -220,7 +222,7 @@ def draw_walkers(posterior, count, rng):
         row += [
             rng.uniform(*p["beta_H2"]),
             rng.uniform(lower, upper),
-            positive(posterior.heavy_location, posterior.heavy_scale),
+            rng.uniform(posterior.heavy_lower, posterior.heavy_upper),
         ]
         row += [positive(*p["parent_velocity"]) for _ in range(4)]
         row += [
@@ -236,7 +238,23 @@ def draw_walkers(posterior, count, rng):
     return np.asarray(rows)
 
 
-def run_sampler(posterior, start, burn, retained, processes=1, seed=None):
+def load_checkpoint(path):
+    if path is None or not Path(path).exists():
+        return None
+    with Path(path).open("rb") as stream:
+        return pickle.load(stream)
+
+
+def save_checkpoint(backend, path):
+    temporary = Path(path).with_suffix(".tmp")
+    with temporary.open("wb") as stream:
+        pickle.dump(backend, stream)
+    temporary.replace(path)
+
+
+def run_sampler(
+    posterior, start, burn, retained, processes=1, seed=None, checkpoint=None
+):
     import emcee
 
     method = "fork" if "fork" in mp.get_all_start_methods() else "spawn"
@@ -248,19 +266,24 @@ def run_sampler(posterior, start, burn, retained, processes=1, seed=None):
             posterior.log_probability,
             pool=pool,
             blobs_dtype=float,
+            backend=load_checkpoint(checkpoint),
         )
-        if seed is not None:
+        if seed is not None and not sampler.iteration:
             sampler.random_state = np.random.RandomState(seed).get_state()
-        state = sampler.run_mcmc(start, burn, progress=False)
-        sampler.reset()
-        sampler.run_mcmc(state, retained, progress=False)
+        while sampler.iteration < burn + retained:
+            steps = min(CHECKPOINT_STEPS, burn + retained - sampler.iteration)
+            state = None if sampler.iteration else start
+            sampler.run_mcmc(state, steps, progress=False)
+            if checkpoint is not None:
+                save_checkpoint(sampler.backend, checkpoint)
     finally:
         if pool:
             pool.close()
             pool.join()
+    chain = sampler.get_chain(discard=burn)
     return (
-        sampler.get_chain(),
-        sampler.get_log_prob(),
-        sampler.get_blobs(),
-        float(np.mean(sampler.acceptance_fraction)),
+        chain,
+        sampler.get_log_prob(discard=burn),
+        sampler.get_blobs(discard=burn),
+        float(np.mean(np.any(chain[1:] != chain[:-1], axis=-1))),
     )
