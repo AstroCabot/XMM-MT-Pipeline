@@ -109,7 +109,7 @@ def main():
     settings = run8.CONFIG["mcmc"]
     rng = np.random.default_rng(settings["seed"])
     start = inference.draw_walkers(posterior, settings["walkers"], rng)
-    chain, logp, logl, acceptance = inference.run_sampler(
+    chain, logp, logl, acceptance = inference.sample(
         posterior,
         start,
         settings["burn_steps"],

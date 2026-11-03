@@ -37,8 +37,8 @@
   },
   "mcmc": {
     "walkers": 96,
-    "burn_steps": 500,
-    "retained_steps": 1500,
+    "burn_steps": 5000,
+    "retained_steps": 20000,
     "processes": 20,
     "seed": 20260829
   }

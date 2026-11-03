@@ -4,9 +4,9 @@ import pickle
 from pathlib import Path
 
 import numpy as np
-from scipy.special import ndtr
+from scipy.special import ndtr, ndtri
 
-CHECKPOINT_STEPS = 100
+CHECKPOINT_STEPS = 500
 
 COORDS = (
     "ln_Qref_H2O",
@@ -266,6 +266,7 @@ def run_sampler(
             posterior.log_probability,
             pool=pool,
             blobs_dtype=float,
+            moves=emcee.moves.DEMove(),
             backend=load_checkpoint(checkpoint),
         )
         if seed is not None and not sampler.iteration:
@@ -287,3 +288,77 @@ def run_sampler(
         sampler.get_blobs(discard=burn),
         float(np.mean(np.any(chain[1:] != chain[:-1], axis=-1))),
     )
+
+
+class Gaussianized:
+    def __init__(self, posterior):
+        self.posterior = posterior
+        p = posterior.config["priors"]
+        self.normal = {
+            COORDS.index("ln_scale"): (0.0, posterior.scale_sigma),
+            COORDS.index("offset"): (0.0, posterior.offset_sigma),
+        }
+        for name in ("H2O", "CO2", "CO"):
+            median, width = p[f"Qref_{name}"]
+            self.normal[COORDS.index(f"ln_Qref_{name}")] = (math.log(median), width)
+            self.normal[COORDS.index(f"beta_{name}")] = tuple(p[f"beta_{name}"])
+        self.uniform = {
+            COORDS.index("beta_H2"): tuple(p["beta_H2"]),
+            COORDS.index("log10_H2_ratio"): tuple(p["log10_H2_ratio"]),
+            COORDS.index("phi_heavy"): (posterior.heavy_lower, posterior.heavy_upper),
+            COORDS.index("v_OH"): tuple(p["OH_velocity"]),
+            COORDS.index("v_O_H2O"): tuple(p["O_velocity"]),
+            COORDS.index("v_O_OH"): tuple(p["O_velocity"]),
+            COORDS.index("v_H"): tuple(p["H_velocity"]),
+        }
+        self.speeds = [COORDS.index(f"v_{name}") for name in ("H2O", "CO2", "CO", "H2")]
+        self.speed_mean, self.speed_sigma = p["parent_velocity"]
+        self.speed_floor = float(ndtr(-self.speed_mean / self.speed_sigma))
+        self.jitter = COORDS.index("jitter")
+        self.jitter_sigma = p["jitter_sigma"]
+
+    def physical(self, latent):
+        latent = np.asarray(latent, float)
+        theta = np.empty_like(latent)
+        for index, (mean, sigma) in self.normal.items():
+            theta[..., index] = mean + sigma * latent[..., index]
+        for index, (lower, upper) in self.uniform.items():
+            theta[..., index] = lower + (upper - lower) * ndtr(latent[..., index])
+        for index in self.speeds:
+            level = self.speed_floor + (1 - self.speed_floor) * ndtr(latent[..., index])
+            theta[..., index] = self.speed_mean + self.speed_sigma * ndtri(level)
+        level = 0.5 * (1 + ndtr(latent[..., self.jitter]))
+        theta[..., self.jitter] = self.jitter_sigma * ndtri(level)
+        return theta
+
+    def latent(self, theta):
+        theta = np.asarray(theta, float)
+        latent = np.empty_like(theta)
+        for index, (mean, sigma) in self.normal.items():
+            latent[..., index] = (theta[..., index] - mean) / sigma
+        for index, (lower, upper) in self.uniform.items():
+            latent[..., index] = ndtri((theta[..., index] - lower) / (upper - lower))
+        for index in self.speeds:
+            level = ndtr((theta[..., index] - self.speed_mean) / self.speed_sigma)
+            latent[..., index] = ndtri(
+                (level - self.speed_floor) / (1 - self.speed_floor)
+            )
+        level = 2 * ndtr(theta[..., self.jitter] / self.jitter_sigma) - 1
+        latent[..., self.jitter] = ndtri(level)
+        return latent
+
+    def log_probability(self, latent):
+        _, likelihood = self.posterior.evaluate(self.physical(latent))
+        if not math.isfinite(likelihood):
+            return -math.inf, -math.inf
+        return likelihood - 0.5 * float(np.sum(np.square(latent))), likelihood
+
+
+def sample(posterior, start, burn, retained, processes=1, seed=None, checkpoint=None):
+    model = Gaussianized(posterior)
+    latent, _, likelihood, acceptance = run_sampler(
+        model, model.latent(start), burn, retained, processes, seed, checkpoint
+    )
+    chain = model.physical(latent)
+    prior = np.array([[posterior.log_prior(row) for row in step] for step in chain])
+    return chain, prior + likelihood, likelihood, acceptance

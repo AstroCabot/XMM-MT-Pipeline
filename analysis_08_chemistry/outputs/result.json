@@ -6,9 +6,13 @@
     "eccentricity": 6.141351449317625,
     "perihelion_jd_tdb": 2460977.9952628477
   },
-  "f107p_sfu": 175.7105,
+  "f107p_sfu": 133.78478,
   "photons_per_captured_ion": 1.0,
-  "mean_acceptance_fraction": 0.13521527777777778,
+  "beta_H2O_prior": [
+    3.3,
+    0.3
+  ],
+  "mean_acceptance_fraction": 0.1465031584912579,
   "background": {
     "model": "continuous broken-law B",
     "mean_ct_s_arcmin2": 0.0001331588036007339,
@@ -16,78 +20,78 @@
   },
   "posterior": {
     "Q_H2O": {
-      "q16": 1.7512395028754829e+28,
-      "median": 2.1349374358456536e+28,
-      "q84": 2.5928097844425397e+28
+      "q16": 1.6971051954412533e+28,
+      "median": 2.089069194508249e+28,
+      "q84": 2.5732634749253203e+28
     },
     "Q_CO2": {
-      "q16": 2.6388423674251987e+27,
-      "median": 3.1303411081331643e+27,
-      "q84": 3.6909009706137286e+27
+      "q16": 2.9575564219942906e+27,
+      "median": 3.509360958200183e+27,
+      "q84": 4.1612651478563256e+27
     },
     "Q_CO": {
-      "q16": 6.889919495617775e+27,
-      "median": 8.450818103215636e+27,
-      "q84": 1.0669952446404532e+28
+      "q16": 6.744165685095429e+27,
+      "median": 8.240973696773961e+27,
+      "q84": 1.0074038699109057e+28
     },
     "Q_H2": {
-      "q16": 1.9271735024238788e+27,
-      "median": 5.911802002337734e+28,
-      "q84": 8.578207856286178e+28
+      "q16": 4.909074863212847e+28,
+      "median": 6.486403340088594e+28,
+      "q84": 8.017918650573812e+28
     },
     "Q_total": {
-      "q16": 4.445657234733289e+28,
-      "median": 9.14469018848316e+28,
-      "q84": 1.1771939139826168e+29
+      "q16": 8.225052908655559e+28,
+      "median": 9.788872646523043e+28,
+      "q84": 1.1310666391955285e+29
     },
     "H2_fraction": {
-      "q16": 0.04614839766340233,
-      "median": 0.640661728061544,
-      "q84": 0.7401691187892582
+      "q16": 0.5808250567910931,
+      "median": 0.6634137921005615,
+      "q84": 0.7231711572326731
     }
   },
   "maximum_likelihood": {
-    "log_probability": 63.39358875484899,
-    "log_likelihood": 76.45948688913882,
-    "Q_total_s-1": 1.1150890503975987e+29,
-    "Q_H2_s-1": 8.268978723456134e+28,
-    "H2_fraction": 0.7415532168043196
+    "log_probability": 62.30346250924469,
+    "log_likelihood": 78.12888230506388,
+    "Q_total_s-1": 1.165005681701122e+29,
+    "Q_H2_s-1": 7.28409457123161e+28,
+    "H2_fraction": 0.6252411199055695
   },
   "maximum_likelihood_high": {
-    "log_probability": 63.39358875484899,
-    "log_likelihood": 76.45948688913882,
-    "Q_total_s-1": 1.1150890503975987e+29,
-    "Q_H2_s-1": 8.268978723456134e+28,
-    "H2_fraction": 0.7415532168043196
+    "log_probability": 62.30346250924469,
+    "log_likelihood": 78.12888230506388,
+    "Q_total_s-1": 1.165005681701122e+29,
+    "Q_H2_s-1": 7.28409457123161e+28,
+    "H2_fraction": 0.6252411199055695
   },
   "maximum_a_posteriori_high": {
-    "log_probability": 73.30757608681694,
-    "log_likelihood": 71.52691809583426,
-    "Q_total_s-1": 9.615022707201242e+28,
-    "Q_H2_s-1": 6.332748989065998e+28,
-    "H2_fraction": 0.6586306847016637
+    "log_probability": 76.8667076313144,
+    "log_likelihood": 75.13824627728569,
+    "Q_total_s-1": 1.0685518968328274e+29,
+    "Q_H2_s-1": 7.116152746030421e+28,
+    "H2_fraction": 0.6659622959935402
   },
   "maximum_a_posteriori_low": {
-    "log_probability": 62.880905548430924,
-    "log_likelihood": 64.9582570690873,
-    "Q_total_s-1": 3.735577963687245e+28,
-    "Q_H2_s-1": 2.4671308356996504e+26,
-    "H2_fraction": 0.006604415326576241
+    "log_probability": 67.98408391676985,
+    "log_likelihood": 67.18027083799001,
+    "Q_total_s-1": 3.642758721012649e+28,
+    "Q_H2_s-1": 9.049076992308878e+24,
+    "H2_fraction": 0.0002484127466392649
   },
-  "sampled_delta_log_likelihood_high_minus_low": 10.711182169152323,
-  "sampled_delta_log_probability_high_minus_low": 10.426670538386013,
-  "tau_one_radius_arcmin": 0.3314822799197215,
+  "sampled_delta_log_likelihood_high_minus_low": 5.98922943851781,
+  "sampled_delta_log_probability_high_minus_low": 8.88262371454455,
+  "tau_one_radius_arcmin": 0.33860235116590687,
   "tau_one_status": "resolved",
   "jitter_prior_checks": {
     "sigma_0.05": {
-      "Q_H2_median_s-1": 6.706994928562232e+28,
-      "H2_fraction_median": 0.6746317511541902,
-      "effective_sample_size": 34236.32042668459
+      "Q_H2_median_s-1": 6.52964473793695e+28,
+      "H2_fraction_median": 0.6648874497658211,
+      "effective_sample_size": 44543.75190646163
     },
     "sigma_0.20": {
-      "Q_H2_median_s-1": 4.639192664988061e+28,
-      "H2_fraction_median": 0.5837205004895027,
-      "effective_sample_size": 25559.17144676191
+      "Q_H2_median_s-1": 6.460390507567638e+28,
+      "H2_fraction_median": 0.6624383178338363,
+      "effective_sample_size": 46891.140321925755
     }
   },
   "fixed_input_checks": {
@@ -101,11 +105,11 @@
         22.37
       ]
     },
-    "fixed_minor_velocity_maximum_profile_fractional_change": 0.07681426207267242,
+    "fixed_minor_velocity_maximum_profile_fractional_change": 0.11222434727352437,
     "daughter_proxy_cross_section_range_cm2": [
       4.4e-15,
       5.41e-15
     ],
-    "daughter_proxy_maximum_profile_fractional_change": 0.03742120341737892
+    "daughter_proxy_maximum_profile_fractional_change": 0.04649973331835173
   }
 }

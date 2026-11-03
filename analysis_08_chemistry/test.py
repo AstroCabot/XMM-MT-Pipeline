@@ -108,7 +108,7 @@ assert (
     CONFIG["mcmc"]["walkers"],
     CONFIG["mcmc"]["burn_steps"],
     CONFIG["mcmc"]["retained_steps"],
-) == (96, 500, 1500)
+) == (96, 5000, 20000)
 
 
 def test_psf_environment(work):
@@ -1189,6 +1189,30 @@ with tempfile.TemporaryDirectory(dir=HERE) as folder:
     assert np.array_equal(first[0], resumed[0][:110])
     for left, right in zip(resumed, whole, strict=True):
         assert np.array_equal(left, right)
+gaussianized = inference.Gaussianized(posterior)
+draws = np.random.default_rng(12).normal(size=(50, len(inference.COORDS)))
+recovered = gaussianized.latent(gaussianized.physical(draws))
+assert np.allclose(recovered, draws, atol=1e-7)
+pushed = [
+    posterior.log_prior(gaussianized.physical(draw))
+    + np.sum(
+        np.log(
+            (gaussianized.physical(draw + 1e-5) - gaussianized.physical(draw - 1e-5))
+            / 2e-5
+        )
+    )
+    + 0.5 * np.sum(draw**2)
+    for draw in draws
+]
+assert np.ptp(pushed) < 1e-4
+expected_ll = posterior.evaluate(gaussianized.physical(draws[0]))[1]
+assert gaussianized.log_probability(draws[0])[1] == expected_ll
+sampled, sampled_lp, sampled_ll, _ = inference.sample(posterior, walkers, 5, 20, 1, 10)
+assert sampled.shape == (20, len(walkers), len(inference.COORDS))
+for step, walker in ((0, 0), (19, 7)):
+    expected_lp, expected_ll = posterior.evaluate(sampled[step, walker])
+    close(sampled_lp[step, walker], expected_lp, relative=1e-9)
+    close(sampled_ll[step, walker], expected_ll, relative=1e-9)
 prediction, variance, model, _, _, physical = posterior.predict(theta)
 assert np.allclose(model, [1, 2])
 assert np.allclose(prediction, [1.3, 2.4])
@@ -1522,6 +1546,26 @@ assert np.mean(np.abs(means)) < 0.15
 assert np.linalg.norm(means) < np.linalg.norm(np.mean(start, axis=0))
 assert np.all(np.isfinite(blobs))
 assert 0.1 < acceptance < 0.8
+
+
+class BoundedToy:
+    @staticmethod
+    def log_probability(theta):
+        if not -4 <= theta[7] <= 1:
+            return -math.inf, -math.inf
+        value = -0.5 * float(np.sum(np.delete(theta, 7) ** 2))
+        return value, value
+
+
+rng = np.random.default_rng(11)
+start = rng.normal(size=(64, len(inference.COORDS)))
+start[:, 7] = rng.uniform(-4, 1, 64)
+chain = inference.run_sampler(BoundedToy(), start, 200, 3000, 1, seed=11)[0]
+ratio = chain[:, :, 7]
+assert ratio.min() >= -4 and ratio.max() <= 1
+assert abs(np.mean(ratio) + 1.5) < 0.15
+assert abs(np.std(ratio) - 5 / math.sqrt(12)) < 0.1
+assert abs(np.std(chain[:, :, 0]) - 1) < 0.1
 
 # Half-normal prior reweighting favors small jitter when its scale shrinks.
 draws = np.tile(physical, (101, 1))

@@ -19,8 +19,12 @@ export LD_LIBRARY_PATH=/home/scabot/miniconda3/envs/xmm/lib:${LD_LIBRARY_PATH:-}
 /home/scabot/miniconda3/envs/xmm/bin/python run.py
 ```
 
-The run builds the PSF/operator and samples 96 walkers for 500 burn-in and 1,500
-retained steps. Outputs are `result.json`, `chemistry.tsv`,
+The run builds the PSF/operator and samples 96 walkers for 5,000 burn-in and
+20,000 retained steps. It uses emcee differential-evolution moves in coordinates where
+every prior is a unit normal: `inference.Gaussianized` maps each parameter
+through its prior CDF, so the likelihood, priors, and posterior are unchanged,
+and chains and log probabilities are reported in the physical parameters.
+Outputs are `result.json`, `chemistry.tsv`,
 `posterior.tsv`, `profile.tsv`, `intrinsic.tsv`, `chain.npz`, `psf.npz`,
 `figure3.png`/`figure3.pdf`, and `corner.png`.
 
@@ -38,8 +42,9 @@ It samples `beta_H2O ~ N(8.253, 0.560)` and writes its products, except
 perihelion rate before perihelion in both fits. `result.json` records the
 `beta_H2O` prior used.
 
-`fit` saves `outputs/chain.pkl` every 100 steps. `run.py fit --resume` continues
-it exactly, and `--retained-steps N` extends a finished run to N retained steps.
+`fit` saves `outputs/chain.pkl`, in those unit-normal coordinates, every 500
+steps. `run.py fit --resume` continues it exactly, and `--retained-steps N`
+extends a finished run to N retained steps.
 `fit` refuses to start while `chain.pkl` exists without `--resume`; remove the
 file when any input changes, because resuming does not check them.
 
