@@ -1,0 +1,11 @@
+{
+  "model": {"density_kg_m3": 500.0, "heat_capacity_J_kg_K": 550.0, "albedo": 0.1, "emissivity": 0.9, "solar_constant_W_m2": 1367.0, "depth_m": 40.0, "step_m": 0.005, "step_days": 0.05, "start_days": -6500.0, "initial_au": 100.0},
+  "conductivity_W_m_K": [1e-4, 1e-3, 1e-2, 1e-1],
+  "release_K": [16.0, 150.0],
+  "isotherms_K": [35.0, 150.0],
+  "ice_fraction": 0.5,
+  "h2_per_h2o": [0.3, 0.4],
+  "latent_heat_J_kg": 2.83e6,
+  "combi_window_days": [9.0, 41.0],
+  "iram_days": 3.5
+}

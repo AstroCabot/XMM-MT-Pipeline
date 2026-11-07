@@ -14,6 +14,7 @@ are in `parameters.json`.
 | `analysis_07_scaling` | Cabot and Wegmann production-rate inversions |
 | `analysis_08_chemistry` | Neutral-chain, opacity, PSF, and H2 posterior calculation |
 | `analysis_09_recoil` | 3I/ATLAS and 1I/ʻOumuamua recoil and radiolytic capacity |
+| `analysis_10_thermal` | Nucleus heating depths and H2 budget |
 
 ## System requirements
 
