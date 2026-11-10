@@ -1,0 +1,45 @@
+\begin{table}[!ht]
+\centering
+\singlespacing
+\small
+
+\setlength{\tabcolsep}{8pt}
+\caption{Parameter specification for the chemical transport model (Part II). This table contains values which were frozen in the model specification, mainly pertaining to photodestruction and photoionization. Rates are calculated by inputting $F_{\rm 10.7P}=133.8$ sfu into the power-law fits of Moore and Mapaye\cite{MooreMapaye2025}.}
+\begin{tabular}{@{}llr@{}}
+\toprule
+Quantity & Value & Source\\
+\midrule
+\multicolumn{3}{@{}l}{\itshape Photodestruction lifetimes at 1 au and \(F_{\rm 10.7P}=133.8\)~sfu (s), scaled as \(r_h^2\)}\\
+\addlinespace[2pt]
+\HtwoO & \(6.706\times10^{4}\) & Moore \& Mapaye\cite{MooreMapaye2025}\\
+OH & \(6.945\times10^{4}\) & Moore \& Mapaye\cite{MooreMapaye2025}\\
+\COtwo & \(2.537\times10^{5}\) & Moore \& Mapaye\cite{MooreMapaye2025}\\
+CO & \(6.834\times10^{5}\) & Moore \& Mapaye\cite{MooreMapaye2025}\\
+\Htwo & \(3.582\times10^{6}\) & Moore \& Mapaye\cite{MooreMapaye2025}\\
+O & \(2.078\times10^{6}\) & Moore \& Mapaye\cite{MooreMapaye2025}\\
+C & \(9.091\times10^{5}\) & Moore \& Mapaye\cite{MooreMapaye2025}\\
+H & \(9.203\times10^{6}\) & Moore \& Mapaye\cite{MooreMapaye2025}\\
+\Otwo & \(2.266\times10^{5}\) & Moore \& Mapaye\cite{MooreMapaye2025}\\
+\addlinespace[4pt]
+\multicolumn{3}{@{}l}{\itshape Branching yields}\\
+\addlinespace[2pt]
+CO \(\rightarrow\) C + O & 0.4145 & Moore \& Mapaye\cite{MooreMapaye2025}\\
+\COtwo\ \(\rightarrow\) CO + O & 0.6045 & Moore \& Mapaye\cite{MooreMapaye2025}\\
+\HtwoO, O-producing & 0.1641 & Moore \& Mapaye\cite{MooreMapaye2025}\\
+\HtwoO, \(\mathrm{H_2}\!:\!\mathrm{2H}\) split & 0.4286 & Moore \& Mapaye\cite{MooreMapaye2025}\\
+\HtwoO, ionization & 0.0541 & Moore \& Mapaye\cite{MooreMapaye2025}\\
+OH \(\rightarrow\) O + H & 0.9703 & Moore \& Mapaye\cite{MooreMapaye2025}\\
+\Htwo\ \(\rightarrow\) H multiplicity & 1.057 & Moore \& Mapaye\cite{MooreMapaye2025}\\
+\addlinespace[4pt]
+\multicolumn{3}{@{}l}{\itshape Mean neutral yields per destruction (\(F_{\rm 10.7P}=133.8\)~sfu)}\\
+\addlinespace[2pt]
+\HtwoO & \(\rightarrow\) 0.78 OH + 0.98 H + 0.16 O + 0.071 \Htwo & Moore \& Mapaye\cite{MooreMapaye2025}\\
+OH & \(\rightarrow\) 0.97 (O + H) & Moore \& Mapaye\cite{MooreMapaye2025}\\
+\COtwo & \(\rightarrow\) 0.64 CO + 0.63 O + 0.014 \Otwo & Moore \& Mapaye\cite{MooreMapaye2025}\\
+CO & \(\rightarrow\) 0.44 C + 0.45 O & Moore \& Mapaye\cite{MooreMapaye2025}\\
+\Htwo & \(\rightarrow\) 1.06 H & Moore \& Mapaye\cite{MooreMapaye2025}\\
+\Otwo & \(\rightarrow\) 1.55 O & Moore \& Mapaye\cite{MooreMapaye2025}\\
+\bottomrule
+\end{tabular}
+\label{tab:photorates}
+\end{table}

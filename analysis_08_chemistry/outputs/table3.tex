@@ -1,0 +1,58 @@
+\begin{table*}[!ht]
+\centering
+\singlespacing
+\small
+\renewcommand{\arraystretch}{0.9}
+\setlength{\tabcolsep}{5pt}
+\caption{Parameter specification for the chemical transport model (Part I). Notation: \(\mathcal U\), uniform; \(\mathcal N(\mu,\sigma)\), normal; \(\mathcal HN(\sigma)\), half-normal; and \(\mathcal{LN}(m,\sigma_{\ln})\), lognormal with median \(m\) and logarithmic width \(\sigma_{\ln}\). Normal distributions on strictly positive physical quantities are truncated at zero.}
+\begin{tabular}{@{}p{0.30\textwidth}p{0.30\textwidth}p{0.34\textwidth}@{}}
+\toprule
+Quantity & Prior & Source\\
+\midrule
+\multicolumn{3}{@{}l}{\itshape Neutral production at $r_h=2.0699$~au}\\
+\addlinespace[2pt]
+\(Q_{\rm ref,H_2O}\) (s$^{-1}$) & \(\mathcal{LN}(1.40\times10^{28},0.20)\) & SPHEREx\cite{Lisse2026}\\
+\(Q_{\rm ref,CO_2}\) (s$^{-1}$) & \(\mathcal{LN}(3.00\times10^{27},0.15)\) & SPHEREx\cite{Lisse2026}\\
+\(Q_{\rm ref,CO}\) (s$^{-1}$) & \(\mathcal{LN}(7.60\times10^{27},0.20)\) & SPHEREx\cite{Lisse2026}\\
+\(\log_{10}r_{\rm H_2}\) & \(\mathcal U(-4,1)\) & ratio to observed parent species\\
+\addlinespace[4pt]
+\multicolumn{3}{@{}l}{\itshape Post-perihelion production histories}\\
+\addlinespace[2pt]
+\(\beta_{\rm H_2O}\) & \(\mathcal{N}(3.3,0.3)\) & Tan et al.\cite{Tan2026}\\
+\(\beta_{\rm H_2O}\), comparison fit & \(\mathcal{N}(8.253,0.560)\) & Frincke \& Seligman\cite{Frincke2026}\\
+\(\beta_{\rm CO_2}\) & \(\mathcal{N}(1.504,0.826)\) & Frincke \& Seligman\cite{Frincke2026}\\
+\(\beta_{\rm CO}\) & \(\mathcal{N}(1.033,0.604)\) & Frincke \& Seligman\cite{Frincke2026}\\
+\(\beta_{\rm H_2}\) & \(\mathcal{U}(0,1)\) & shallow evolution profile\\
+\addlinespace[4pt]
+\multicolumn{3}{@{}l}{\itshape Solar wind and X-ray emission}\\
+\addlinespace[2pt]
+\(\Phi_{\rm heavy}\) (cm\(^{-2}\)\,s\(^{-1}\)) & \(\mathcal{U}(4.31\times10^{3},1.59\times10^{5})\) & mapped proton-flux envelope \(\times f\)\\
+\(\Delta E\) (eV) & 501.6, fixed & count-weighted band mean\\
+ECF\(_{\rm MOS2}\) (erg\,cm\(^{-2}\)\,cts\(^{-1}\)) & \(1.1853\times10^{-11}\), fixed & MOS2 energy conversion factor\\
+\addlinespace[4pt]
+\multicolumn{3}{@{}l}{\itshape Radial-profile nuisance parameters}\\
+\addlinespace[2pt]
+\(a\) & \(\mathcal{LN}(1,0.10)\) & MOS2 ECF uncertainty\cite{XMMCal2025}\\
+\(b\) (count\,s\(^{-1}\)\,arcmin\(^{-2}\)) & \(\mathcal{N}(0,3.5\times10^{-5})\) & residual flat-sky term\\
+\(j\) & \(\mathcal{HN}(0.10)\) & fractional profile scatter\\
+\addlinespace[4pt]
+\multicolumn{3}{@{}l}{\itshape Charge-exchange cross sections (cm\(^2\))}\\
+\addlinespace[2pt]
+\(\sigma_{\rm H_2O}\) & \(4.73\times10^{-15}\), fixed & Machacek et al.\cite{Machacek2015}\\
+\(\sigma_{\rm CO}\) & \(5.41\times10^{-15}\), fixed & Machacek et al.\cite{Machacek2015}\\
+\(\sigma_{\rm CO_2}\) & \(4.40\times10^{-15}\), fixed & Machacek et al.\cite{Machacek2015}\\
+\(\sigma_{\rm H_2}\) & \(4.24\times10^{-15}\), fixed & Machacek et al.\cite{Machacek2014}\\
+\(\sigma_{\rm OH,O,C,O_2,H}\) & \(4.81\times10^{-15}\), fixed & molecule-average as proxy\cite{Machacek2015}\\
+\addlinespace[4pt]
+\multicolumn{3}{@{}l}{\itshape Outflow and recoil speeds (km\,s$^{-1}$)}\\
+\addlinespace[2pt]
+\HtwoO; \COtwo; CO; \Htwo, nucleus & \(\mathcal{N}(0.37,0.05)\) & IRAM\cite{Biver2026}\\
+OH & \(\mathcal{U}(0.30,2.57)\) & IRAM\cite{Biver2026}, Combi et al.\cite{Combi2004}\\
+O from \HtwoO or OH & \(\mathcal{U}(0.30,3.07)\) & Combi et al.\cite{Combi2004}\\
+H & \(\mathcal{U}(4.0,24.0)\) & Combi et al.\cite{Combi2004}\\
+CO; O; \Otwo; C, daughters & 1.7, fixed & midpoint of range\cite{Combi2004}\\
+Photolytic \Htwo & 11.3, fixed & midpoint of range\cite{Combi2004}\\
+\bottomrule
+\end{tabular}
+\label{tab:model}
+\end{table*}

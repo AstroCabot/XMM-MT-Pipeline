@@ -1,6 +1,7 @@
 numpy==2.3.5
 scipy==1.16.3
 astropy==7.1.1
+astroquery==0.4.11
 matplotlib==3.10.8
 emcee==3.1.6
 corner==2.3.0

@@ -3,7 +3,7 @@
   "odf": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/ODF",
   "pps": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/PPS",
   "mt_pps": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/MT_PPS",
-  "summary": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Cambridge/X3I/analysis_xmm3i_final/reduction/inputs/4759_0963720201_SCX00000SUM.SAS",
+  "summary": null,
   "sas": "/home/scabot/Programs/sas/xmmsas_22.1.0-a8f2c2afa-20250304/setsas.sh",
   "ccf": "/home/scabot/Programs/sas/ccf",
   "headas": "/home/scabot/Programs/heasoft/heasoft-6.36/x86_64-pc-linux-gnu-libc2.39",

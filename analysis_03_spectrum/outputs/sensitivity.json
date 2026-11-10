@@ -1,0 +1,307 @@
+{
+  "spectral_input_sha256_matches": {
+    "analysis_03_spectrum/outputs/stack/mos1-inner-background.pi": true,
+    "analysis_03_spectrum/outputs/stack/mos1-inner-source.pi": true,
+    "analysis_03_spectrum/outputs/stack/mos1-inner.arf": true,
+    "analysis_03_spectrum/outputs/stack/mos1-inner.rmf": true,
+    "analysis_03_spectrum/outputs/stack/mos1-outer-background.pi": true,
+    "analysis_03_spectrum/outputs/stack/mos1-outer-source.pi": true,
+    "analysis_03_spectrum/outputs/stack/mos1-outer.arf": true,
+    "analysis_03_spectrum/outputs/stack/mos1-outer.rmf": true,
+    "analysis_03_spectrum/outputs/stack/mos2-inner-background.pi": true,
+    "analysis_03_spectrum/outputs/stack/mos2-inner-source.pi": true,
+    "analysis_03_spectrum/outputs/stack/mos2-inner.arf": true,
+    "analysis_03_spectrum/outputs/stack/mos2-inner.rmf": true,
+    "analysis_03_spectrum/outputs/stack/mos2-outer-background.pi": true,
+    "analysis_03_spectrum/outputs/stack/mos2-outer-source.pi": true,
+    "analysis_03_spectrum/outputs/stack/mos2-outer.arf": true,
+    "analysis_03_spectrum/outputs/stack/mos2-outer.rmf": true,
+    "analysis_03_spectrum/outputs/stack/pn-inner-background.pi": true,
+    "analysis_03_spectrum/outputs/stack/pn-inner-source.pi": true,
+    "analysis_03_spectrum/outputs/stack/pn-inner.arf": true,
+    "analysis_03_spectrum/outputs/stack/pn-inner.rmf": true,
+    "analysis_03_spectrum/outputs/stack/pn-outer-background.pi": true,
+    "analysis_03_spectrum/outputs/stack/pn-outer-source.pi": true,
+    "analysis_03_spectrum/outputs/stack/pn-outer.arf": true,
+    "analysis_03_spectrum/outputs/stack/pn-outer.rmf": true,
+    "analysis_03_spectrum/outputs/result.json": true
+  },
+  "chain_sha256": {
+    "tan": "52ecd15698675d95fb614924bc29b4d5531675804688b607f740f8ecb58612b9",
+    "frincke": "4d373514d18f3a803ff3079dff03ff5e90ee0d09952c452a5e4d6bafb68b6a85"
+  },
+  "heavy_ion_prior": {
+    "distribution": "uniform",
+    "contemporaneous": false,
+    "units": "cm^-2 s^-1",
+    "lower": 4312.4987164044305,
+    "upper": 158544.04703968228
+  },
+  "method": "At fixed extracted profile, a multiplicative change k in mean energy/ECF is absorbed by Phi -> Phi/k. The uniform prior gives constant weight inside its bounds and zero outside. The retained-sample check does not integrate newly accessible prior support or change detector exposure weights; it is not a new posterior fit.",
+  "variants": [
+    {
+      "variant": "acxmodel_1",
+      "chi2": 935.1447858671056,
+      "dof": 628,
+      "delta_chi2": 6.302977479598326,
+      "mean_photon_energy_eV": 501.8867337562206,
+      "energy_change_percent": 0.06680273048476071,
+      "luminosity_change_percent": -0.45752595480086367,
+      "MOS2_ECF_erg_cm2_per_count": 1.184078026631133e-11,
+      "scale_energy_over_ECF": 1.0017254629358423,
+      "normalization_check": {
+        "tan": {
+          "retained_draws": 48000,
+          "total_draws": 48000,
+          "Q_H2_q16_median_q84": [
+            4.909074799839658e+28,
+            6.486403413007387e+28,
+            8.017918781099125e+28
+          ],
+          "median_change_percent": 0.0
+        },
+        "frincke": {
+          "retained_draws": 48000,
+          "total_draws": 48000,
+          "Q_H2_q16_median_q84": [
+            3.7002223374659737e+28,
+            4.955259902941976e+28,
+            6.262359509384562e+28
+          ],
+          "median_change_percent": 0.0
+        }
+      }
+    },
+    {
+      "variant": "acxmodel_4",
+      "chi2": 922.886069122214,
+      "dof": 628,
+      "delta_chi2": -5.955739265293232,
+      "mean_photon_energy_eV": 501.50588035941877,
+      "energy_change_percent": -0.009132294618974246,
+      "luminosity_change_percent": 0.2041396626689007,
+      "MOS2_ECF_erg_cm2_per_count": 1.1849890155634977e-11,
+      "scale_energy_over_ECF": 1.0001957939935227,
+      "normalization_check": {
+        "tan": {
+          "retained_draws": 48000,
+          "total_draws": 48000,
+          "Q_H2_q16_median_q84": [
+            4.909074799839658e+28,
+            6.486403413007387e+28,
+            8.017918781099125e+28
+          ],
+          "median_change_percent": 0.0
+        },
+        "frincke": {
+          "retained_draws": 48000,
+          "total_draws": 48000,
+          "Q_H2_q16_median_q84": [
+            3.7002223374659737e+28,
+            4.955259902941976e+28,
+            6.262359509384562e+28
+          ],
+          "median_change_percent": 0.0
+        }
+      }
+    },
+    {
+      "variant": "baseline",
+      "chi2": 928.8418088016662,
+      "dof": 628,
+      "delta_chi2": 4.1415887608309276e-07,
+      "mean_photon_energy_eV": 501.55175441206313,
+      "energy_change_percent": 1.4131193193378522e-05,
+      "luminosity_change_percent": -0.00013994100971359558,
+      "MOS2_ECF_erg_cm2_per_count": 1.1853282851684846e-11,
+      "scale_energy_over_ECF": 1.0000009781168824,
+      "normalization_check": {
+        "tan": {
+          "retained_draws": 48000,
+          "total_draws": 48000,
+          "Q_H2_q16_median_q84": [
+            4.909074799839658e+28,
+            6.486403413007387e+28,
+            8.017918781099125e+28
+          ],
+          "median_change_percent": 0.0
+        },
+        "frincke": {
+          "retained_draws": 48000,
+          "total_draws": 48000,
+          "Q_H2_q16_median_q84": [
+            3.7002223374659737e+28,
+            4.955259902941976e+28,
+            6.262359509384562e+28
+          ],
+          "median_change_percent": 0.0
+        }
+      }
+    },
+    {
+      "variant": "hefrac_0.5",
+      "chi2": 879.6211518843822,
+      "dof": 628,
+      "delta_chi2": -49.22065650312504,
+      "mean_photon_energy_eV": 494.3806930331142,
+      "energy_change_percent": -1.429761027446541,
+      "luminosity_change_percent": 10.652547900536891,
+      "MOS2_ECF_erg_cm2_per_count": 1.2154360491475673e-11,
+      "scale_energy_over_ECF": 0.9612861999823679,
+      "normalization_check": {
+        "tan": {
+          "retained_draws": 47954,
+          "total_draws": 48000,
+          "Q_H2_q16_median_q84": [
+            4.915008661109509e+28,
+            6.488450322759387e+28,
+            8.018583954752437e+28
+          ],
+          "median_change_percent": 0.031556929498011144
+        },
+        "frincke": {
+          "retained_draws": 47760,
+          "total_draws": 48000,
+          "Q_H2_q16_median_q84": [
+            3.7233708679494205e+28,
+            4.963591574127703e+28,
+            6.267585846818483e+28
+          ],
+          "median_change_percent": 0.16813792513246106
+        }
+      }
+    },
+    {
+      "variant": "hefrac_0",
+      "chi2": 956.4914368388761,
+      "dof": 628,
+      "delta_chi2": 27.649628451368812,
+      "mean_photon_energy_eV": 502.96507634833654,
+      "energy_change_percent": 0.2818040209822126,
+      "luminosity_change_percent": -1.843401655317678,
+      "MOS2_ECF_erg_cm2_per_count": 1.1804923844216123e-11,
+      "scale_energy_over_ECF": 1.0069269385451742,
+      "normalization_check": {
+        "tan": {
+          "retained_draws": 48000,
+          "total_draws": 48000,
+          "Q_H2_q16_median_q84": [
+            4.909074799839658e+28,
+            6.486403413007387e+28,
+            8.017918781099125e+28
+          ],
+          "median_change_percent": 0.0
+        },
+        "frincke": {
+          "retained_draws": 48000,
+          "total_draws": 48000,
+          "Q_H2_q16_median_q84": [
+            3.7002223374659737e+28,
+            4.955259902941976e+28,
+            6.262359509384562e+28
+          ],
+          "median_change_percent": 0.0
+        }
+      }
+    },
+    {
+      "variant": "hefrac_free",
+      "chi2": 867.3490847360775,
+      "dof": 627,
+      "delta_chi2": -61.49272365142974,
+      "mean_photon_energy_eV": 495.84275862307715,
+      "energy_change_percent": -1.1382525672111399,
+      "luminosity_change_percent": 8.105904451483692,
+      "MOS2_ECF_erg_cm2_per_count": 1.20786682167132e-11,
+      "scale_energy_over_ECF": 0.9701708955871885,
+      "normalization_check": {
+        "tan": {
+          "retained_draws": 47981,
+          "total_draws": 48000,
+          "Q_H2_q16_median_q84": [
+            4.911974125076015e+28,
+            6.487189450908461e+28,
+            8.018133252095311e+28
+          ],
+          "median_change_percent": 0.012118239508462914
+        },
+        "frincke": {
+          "retained_draws": 47818,
+          "total_draws": 48000,
+          "Q_H2_q16_median_q84": [
+            3.718123922108168e+28,
+            4.962008873000969e+28,
+            6.266909641717068e+28
+          ],
+          "median_change_percent": 0.13619810446241498
+        }
+      }
+    },
+    {
+      "variant": "recombtype_2",
+      "chi2": 856.0161575491667,
+      "dof": 628,
+      "delta_chi2": -72.82565083834061,
+      "mean_photon_energy_eV": 501.95030442915765,
+      "energy_change_percent": 0.07947753051509299,
+      "luminosity_change_percent": 2.674608044004101,
+      "MOS2_ECF_erg_cm2_per_count": 1.178804582346646e-11,
+      "scale_energy_over_ECF": 1.0063341840199573,
+      "normalization_check": {
+        "tan": {
+          "retained_draws": 48000,
+          "total_draws": 48000,
+          "Q_H2_q16_median_q84": [
+            4.909074799839658e+28,
+            6.486403413007387e+28,
+            8.017918781099125e+28
+          ],
+          "median_change_percent": 0.0
+        },
+        "frincke": {
+          "retained_draws": 48000,
+          "total_draws": 48000,
+          "Q_H2_q16_median_q84": [
+            3.7002223374659737e+28,
+            4.955259902941976e+28,
+            6.262359509384562e+28
+          ],
+          "median_change_percent": 0.0
+        }
+      }
+    },
+    {
+      "variant": "recombtype_2_hefrac_0",
+      "chi2": 875.6912172128348,
+      "dof": 628,
+      "delta_chi2": -53.15059117467251,
+      "mean_photon_energy_eV": 503.1671736145106,
+      "energy_change_percent": 0.32209842588759585,
+      "luminosity_change_percent": 0.8602745375596133,
+      "MOS2_ECF_erg_cm2_per_count": 1.1748668464254742e-11,
+      "scale_energy_over_ECF": 1.0121548732248933,
+      "normalization_check": {
+        "tan": {
+          "retained_draws": 48000,
+          "total_draws": 48000,
+          "Q_H2_q16_median_q84": [
+            4.909074799839658e+28,
+            6.486403413007387e+28,
+            8.017918781099125e+28
+          ],
+          "median_change_percent": 0.0
+        },
+        "frincke": {
+          "retained_draws": 48000,
+          "total_draws": 48000,
+          "Q_H2_q16_median_q84": [
+            3.7002223374659737e+28,
+            4.955259902941976e+28,
+            6.262359509384562e+28
+          ],
+          "median_change_percent": 0.0
+        }
+      }
+    }
+  ]
+}

@@ -14,6 +14,12 @@ export LD_LIBRARY_PATH=/home/scabot/miniconda3/envs/xmm/lib:${LD_LIBRARY_PATH:-}
 ```
 
 The original ODF and PPS trees are read-only inputs.
+Set their paths and the software paths in `settings.json` before running.
+With `summary: null`, initialization builds the calibration index and uses
+SAS `odfingest` to create the ODF summary in the copied ODF tree; an existing
+summary is reused. An externally prepared summary can instead be supplied
+as an absolute path in `summary`. This follows the
+[SAS setup sequence](https://xmm-tools.cosmos.esa.int/external/xmm_user_support/documentation/sas_usg/USG/odfingest.html).
 
 PN background products use an OoT image rebuilt from the OoT event list. Hard
 soft-proton maps use the signed all-filter FLARE B4--B6 calibration and fitted

@@ -1,0 +1,383 @@
+{
+  "description": "Completed joint PN/MOS donor/capture refits; unaltered fitted scalars archived 2026-10-29. Input hashes checked 2026-11-10. No spectral arrays or duplicated inputs.",
+  "input_sha256": {
+    "analysis_03_spectrum/outputs/stack/mos1-inner-background.pi": "b0ff0980a3876b2ce208e9b941503dd20c59f1ab8b9043ff7898543cf5db4f54",
+    "analysis_03_spectrum/outputs/stack/mos1-inner-source.pi": "d77f108b33dae388cb91702fc4e2eb9bb75d29ef75dd28c2df1d735600665694",
+    "analysis_03_spectrum/outputs/stack/mos1-inner.arf": "26e3744430860dd15a07653f011cbd1da46c0bd78866370d896a8438b769ea4b",
+    "analysis_03_spectrum/outputs/stack/mos1-inner.rmf": "8135630b04515a93281cb8d67af0c549c2c7e797176c746061a59065bd6bb448",
+    "analysis_03_spectrum/outputs/stack/mos1-outer-background.pi": "f5afb3eef87ec3a8184ebb8a78e78db3b18dc769db3bfd04beb4045806e6e517",
+    "analysis_03_spectrum/outputs/stack/mos1-outer-source.pi": "94b8148f58841ac1a45c7c8821f7494c198034e7b13465a4225ad1b0c6ba9dc2",
+    "analysis_03_spectrum/outputs/stack/mos1-outer.arf": "086a48fe6bf71ffa8b9db428c6a4fd67b13ef7d670f3dbd30eee3fb3d47ac25c",
+    "analysis_03_spectrum/outputs/stack/mos1-outer.rmf": "8f97812b1556eb0de3851ad59856280635dd080a1d12cd3af170f89366c96a60",
+    "analysis_03_spectrum/outputs/stack/mos2-inner-background.pi": "43cfa3f32bdd332a618603d8da8aeefde4f8000f517b0992e93e8246aff8bbb9",
+    "analysis_03_spectrum/outputs/stack/mos2-inner-source.pi": "edcb341d2502dff4da00439f7b7bece418e01197de5ac7208bf6d81016aceca6",
+    "analysis_03_spectrum/outputs/stack/mos2-inner.arf": "360eb09b4a382fa55fafd55356587ad15dac72c4a3baa28468f0ae1ff1162ca2",
+    "analysis_03_spectrum/outputs/stack/mos2-inner.rmf": "77711d396bf6596cc86468855d6cea020f9a26b0e81596944401c1f72c8764be",
+    "analysis_03_spectrum/outputs/stack/mos2-outer-background.pi": "de8d258300d72fa6c4cd5be2cc8425e06651fd62d79735afc40c06e3e8a7f1e0",
+    "analysis_03_spectrum/outputs/stack/mos2-outer-source.pi": "f379adb15d5725066a9acab1dcc6930114298066d0b26373ab63a5758d54c9e0",
+    "analysis_03_spectrum/outputs/stack/mos2-outer.arf": "e53731c79bfa198c6cb4d91e720a6a9ce998b56a4a6aaf96688b38f52ac2227b",
+    "analysis_03_spectrum/outputs/stack/mos2-outer.rmf": "11b6bdbc9b981d5b1bf76436079d1748e4a3bf2272117b9decd5e6b44a6770f9",
+    "analysis_03_spectrum/outputs/stack/pn-inner-background.pi": "e52761e1c5037eb1c4d98e98b6fcf13be0570cfb3b595c12b569307e91a667fc",
+    "analysis_03_spectrum/outputs/stack/pn-inner-source.pi": "4b6ac43d4b8bbc4eeadff4b37c9556b2d8de05887aecd95a1ca89e70f70aed04",
+    "analysis_03_spectrum/outputs/stack/pn-inner.arf": "596ff8fbe7092477a1077f04b3453a6e0d8227f2c4c69f703230add326e014c1",
+    "analysis_03_spectrum/outputs/stack/pn-inner.rmf": "a16d557e8d2039fd28ec30338f3451f2a9d5cd9cfbe1b422c38c59545af48253",
+    "analysis_03_spectrum/outputs/stack/pn-outer-background.pi": "f13082bc993a037a4e6f9d8928bbbd91544302de262aafb447c1160b20bff47f",
+    "analysis_03_spectrum/outputs/stack/pn-outer-source.pi": "cf2dcd4eef992ef9b193cd2ee0a2782a45cd47db532fe47a395a3961d95aa6f5",
+    "analysis_03_spectrum/outputs/stack/pn-outer.arf": "1edf425e32f973b62ff328c2c27419b4c99ad61d773aa3c71b318dbdd43efe58",
+    "analysis_03_spectrum/outputs/stack/pn-outer.rmf": "124b1a66a463063940a916f2ae62b6aaa3ff217fcba40cf23598f489eb4663ca",
+    "analysis_03_spectrum/outputs/result.json": "4491e75b0aea56a40e8d39251eab5e7f3f89ba19980041a091c3c6af23a8b1ef"
+  },
+  "fits": [
+    {
+      "variant": "acxmodel_1",
+      "change": {
+        "acxmodel": 1
+      },
+      "chi2": 935.1447858671056,
+      "dof": 628,
+      "parameters": {
+        "lhb_norm": 1.447092979523814e-05,
+        "halo_norm": 1.3736873055698792e-06,
+        "cxb_norm": 9.123281241104129e-07,
+        "cx_temperature_keV": 0.17122473640775734,
+        "cx_collision_keV_u": 38.84390558003017
+      },
+      "crosscal": {
+        "pn": 1.0,
+        "mos1": 0.8201569040794476,
+        "mos2": 0.7608506028233188
+      },
+      "mean_photon_energy_eV": 501.8867337562206,
+      "detector_K": {
+        "pn": 542419529249.5726,
+        "mos1": 97471257008.2716,
+        "mos2": 84453893874.30315
+      },
+      "Hefrac": 0.09,
+      "recombtype": 1,
+      "acxmodel": 1,
+      "versions": {
+        "acx2": "2.5.1",
+        "pyatomdb": "1.2.0",
+        "numpy": "2.3.5"
+      },
+      "regions": {
+        "inner": {
+          "luminosity_erg_s": 3.236158985921295e+16,
+          "cx_norm_per_arcmin2": 0.013692801867227801
+        },
+        "outer": {
+          "luminosity_erg_s": 1.0926246428433584e+16,
+          "cx_norm_per_arcmin2": 0.0031645134261716187
+        }
+      }
+    },
+    {
+      "variant": "acxmodel_4",
+      "change": {
+        "acxmodel": 4
+      },
+      "chi2": 922.886069122214,
+      "dof": 628,
+      "parameters": {
+        "lhb_norm": 1.3999522196496576e-05,
+        "halo_norm": 1.3394950780302346e-06,
+        "cxb_norm": 9.199306095854894e-07,
+        "cx_temperature_keV": 0.17151855289326062,
+        "cx_collision_keV_u": 38.458208718728066
+      },
+      "crosscal": {
+        "pn": 1.0,
+        "mos1": 0.8200911652800522,
+        "mos2": 0.7609440481620628
+      },
+      "mean_photon_energy_eV": 501.50588035941877,
+      "detector_K": {
+        "pn": 541705786819.668,
+        "mos1": 97386630458.17352,
+        "mos2": 84388967903.17252
+      },
+      "Hefrac": 0.09,
+      "recombtype": 1,
+      "acxmodel": 4,
+      "versions": {
+        "acx2": "2.5.1",
+        "pyatomdb": "1.2.0",
+        "numpy": "2.3.5"
+      },
+      "regions": {
+        "inner": {
+          "luminosity_erg_s": 3.2576699555268692e+16,
+          "cx_norm_per_arcmin2": 0.013527789724053694
+        },
+        "outer": {
+          "luminosity_erg_s": 1.1175522914643128e+16,
+          "cx_norm_per_arcmin2": 0.00317658946768936
+        }
+      }
+    },
+    {
+      "variant": "baseline",
+      "change": {},
+      "chi2": 928.8418088016662,
+      "dof": 628,
+      "parameters": {
+        "lhb_norm": 1.4176751725917572e-05,
+        "halo_norm": 1.3551193316957076e-06,
+        "cxb_norm": 9.157511149301649e-07,
+        "cx_temperature_keV": 0.17125510006520778,
+        "cx_collision_keV_u": 38.92974909941966
+      },
+      "crosscal": {
+        "pn": 1.0,
+        "mos1": 0.8200579625905864,
+        "mos2": 0.7607970172129719
+      },
+      "mean_photon_energy_eV": 501.55175441206313,
+      "detector_K": {
+        "pn": 541676190216.32635,
+        "mos1": 97367412238.28447,
+        "mos2": 84364813740.84972
+      },
+      "Hefrac": 0.09,
+      "recombtype": 1,
+      "acxmodel": 8,
+      "versions": {
+        "acx2": "2.5.1",
+        "pyatomdb": "1.2.0",
+        "numpy": "2.3.5"
+      },
+      "regions": {
+        "inner": {
+          "luminosity_erg_s": 3.251028757571665e+16,
+          "cx_norm_per_arcmin2": 0.013734380393009353
+        },
+        "outer": {
+          "luminosity_erg_s": 1.108361092767195e+16,
+          "cx_norm_per_arcmin2": 0.0032051105183306464
+        }
+      }
+    },
+    {
+      "variant": "hefrac_0.5",
+      "change": {
+        "Hefrac": 0.5
+      },
+      "chi2": 879.6211518843822,
+      "dof": 628,
+      "parameters": {
+        "lhb_norm": 7.139264183850906e-06,
+        "halo_norm": 7.606175187052167e-07,
+        "cxb_norm": 1.1321870114987099e-06,
+        "cx_temperature_keV": 0.1651025105542856,
+        "cx_collision_keV_u": 34.41486388943777
+      },
+      "crosscal": {
+        "pn": 1.0,
+        "mos1": 0.8168278413815624,
+        "mos2": 0.7615858145146259
+      },
+      "mean_photon_energy_eV": 494.3806930331142,
+      "detector_K": {
+        "pn": 525260030972.80304,
+        "mos1": 94563861299.9608,
+        "mos2": 82274999223.63986
+      },
+      "Hefrac": 0.5,
+      "recombtype": 1,
+      "acxmodel": 8,
+      "versions": {
+        "acx2": "2.5.1",
+        "pyatomdb": "1.2.0",
+        "numpy": "2.3.5"
+      },
+      "regions": {
+        "inner": {
+          "luminosity_erg_s": 3.59735118740179e+16,
+          "cx_norm_per_arcmin2": 0.020133478151468195
+        },
+        "outer": {
+          "luminosity_erg_s": 1.5005641156082116e+16,
+          "cx_norm_per_arcmin2": 0.0057486253232865
+        }
+      }
+    },
+    {
+      "variant": "hefrac_0",
+      "change": {
+        "Hefrac": 0.0
+      },
+      "chi2": 956.4914368388761,
+      "dof": 628,
+      "parameters": {
+        "lhb_norm": 1.5398598262116e-05,
+        "halo_norm": 1.4430156286207393e-06,
+        "cxb_norm": 8.879634194441509e-07,
+        "cx_temperature_keV": 0.1723835155073223,
+        "cx_collision_keV_u": 38.75347500955768
+      },
+      "crosscal": {
+        "pn": 1.0,
+        "mos1": 0.8207654280821293,
+        "mos2": 0.7609162007702633
+      },
+      "mean_photon_energy_eV": 502.96507634833654,
+      "detector_K": {
+        "pn": 544604969521.11,
+        "mos1": 97816426412.37617,
+        "mos2": 84710415178.99792
+      },
+      "Hefrac": 0.0,
+      "recombtype": 1,
+      "acxmodel": 8,
+      "versions": {
+        "acx2": "2.5.1",
+        "pyatomdb": "1.2.0",
+        "numpy": "2.3.5"
+      },
+      "regions": {
+        "inner": {
+          "luminosity_erg_s": 3.1911037053024812e+16,
+          "cx_norm_per_arcmin2": 0.01256848997041582
+        },
+        "outer": {
+          "luminosity_erg_s": 1.0441992815948902e+16,
+          "cx_norm_per_arcmin2": 0.00281513386704938
+        }
+      }
+    },
+    {
+      "variant": "hefrac_free",
+      "change": {
+        "Hefrac": "free"
+      },
+      "chi2": 867.3490847360775,
+      "dof": 627,
+      "parameters": {
+        "lhb_norm": 8.759097190067301e-06,
+        "halo_norm": 9.349101379906932e-07,
+        "cxb_norm": 1.0648339342108475e-06,
+        "cx_temperature_keV": 0.1665172129270784,
+        "cx_collision_keV_u": 37.23823136520701
+      },
+      "crosscal": {
+        "pn": 1.0,
+        "mos1": 0.8175193856480966,
+        "mos2": 0.7610608912388467
+      },
+      "mean_photon_energy_eV": 495.84275862307715,
+      "detector_K": {
+        "pn": 529040928536.4653,
+        "mos1": 95287916815.12407,
+        "mos2": 82790584363.95367
+      },
+      "Hefrac": 0.4000688489342527,
+      "recombtype": 1,
+      "acxmodel": 8,
+      "versions": {
+        "acx2": "2.5.1",
+        "pyatomdb": "1.2.0",
+        "numpy": "2.3.5"
+      },
+      "regions": {
+        "inner": {
+          "luminosity_erg_s": 3.5145589606599776e+16,
+          "cx_norm_per_arcmin2": 0.018764506904126493
+        },
+        "outer": {
+          "luminosity_erg_s": 1.403852982038113e+16,
+          "cx_norm_per_arcmin2": 0.005130520515754507
+        }
+      }
+    },
+    {
+      "variant": "recombtype_2",
+      "change": {
+        "recombtype": 2
+      },
+      "chi2": 856.0161575491667,
+      "dof": 628,
+      "parameters": {
+        "lhb_norm": 1.0817894786289362e-05,
+        "halo_norm": 1.2488699505561985e-06,
+        "cxb_norm": 9.421941622740098e-07,
+        "cx_temperature_keV": 0.17575795100451735,
+        "cx_collision_keV_u": 40.78114976356191
+      },
+      "crosscal": {
+        "pn": 1.0,
+        "mos1": 0.8220364198814396,
+        "mos2": 0.7635454283931682
+      },
+      "mean_photon_energy_eV": 501.95030442915765,
+      "detector_K": {
+        "pn": 544704368922.03564,
+        "mos1": 97934915956.19435,
+        "mos2": 84831702809.40886
+      },
+      "Hefrac": 0.09,
+      "recombtype": 2,
+      "acxmodel": 8,
+      "versions": {
+        "acx2": "2.5.1",
+        "pyatomdb": "1.2.0",
+        "numpy": "2.3.5"
+      },
+      "regions": {
+        "inner": {
+          "luminosity_erg_s": 3.3379857054454636e+16,
+          "cx_norm_per_arcmin2": 0.011934340538282493
+        },
+        "outer": {
+          "luminosity_erg_s": 1.2495170139058632e+16,
+          "cx_norm_per_arcmin2": 0.0030579445373433564
+        }
+      }
+    },
+    {
+      "variant": "recombtype_2_hefrac_0",
+      "change": {
+        "recombtype": 2,
+        "Hefrac": 0.0
+      },
+      "chi2": 875.6912172128348,
+      "dof": 628,
+      "parameters": {
+        "lhb_norm": 1.2040682401680207e-05,
+        "halo_norm": 1.354219423102392e-06,
+        "cxb_norm": 9.084999939276069e-07,
+        "cx_temperature_keV": 0.17689483701349515,
+        "cx_collision_keV_u": 41.027640106757396
+      },
+      "crosscal": {
+        "pn": 1.0,
+        "mos1": 0.8226706632527796,
+        "mos2": 0.7635998813201405
+      },
+      "mean_photon_energy_eV": 503.1671736145106,
+      "detector_K": {
+        "pn": 547316050339.7633,
+        "mos1": 98316933623.28357,
+        "mos2": 85116028513.57108
+      },
+      "Hefrac": 0.0,
+      "recombtype": 2,
+      "acxmodel": 8,
+      "versions": {
+        "acx2": "2.5.1",
+        "pyatomdb": "1.2.0",
+        "numpy": "2.3.5"
+      },
+      "regions": {
+        "inner": {
+          "luminosity_erg_s": 3.279001118849069e+16,
+          "cx_norm_per_arcmin2": 0.011024936065813706
+        },
+        "outer": {
+          "luminosity_erg_s": 1.1826069900440296e+16,
+          "cx_norm_per_arcmin2": 0.002721751263619295
+        }
+      }
+    }
+  ]
+}

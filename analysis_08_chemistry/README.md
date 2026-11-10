@@ -52,6 +52,11 @@ file when any input changes, because resuming does not check them.
 `outputs/prior_table.tex` from the inputs the fit reads. It needs no fit; rerun
 it after Tasks 03, 05, or 06 change.
 
+`python paper_tables.py` exports complete Extended Data Tables 3--5 to
+`outputs/table3.tex`, `table4.tex`, and `table5.tex`, using the same current
+inputs and `outputs/posterior.tsv`. These uncolored LaTeX tables preserve the
+paper's labels and need its macros, `booktabs`, and `setspace`; no fit is run.
+
 `log10_H2_ratio >= -0.5` defines the high mode and `<= -1.5` the low mode.
 `parameters.json` defines the priors; `transport.py` and `inference.py` implement
 the physical model and likelihood.

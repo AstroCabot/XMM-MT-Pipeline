@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Scratch and downloaded caches
+analysis_*/work/
+analysis_*/cache/
+work/
+tmp/
+temp/
+
+# Local analysis notes
+sol_notes/
+
+
+# Reduction products
+analysis_01_reduction/outputs/*
+!analysis_01_reduction/outputs/08_figure/
+analysis_01_reduction/outputs/08_figure/*
+!analysis_01_reduction/outputs/08_figure/pn-sky-frame-mosaic.pdf
+!analysis_01_reduction/outputs/08_figure/pn-sky-frame-mosaic.png
+
+# Regenerable task products
+analysis_02_pps_luminosity/outputs/*
+!analysis_02_pps_luminosity/outputs/result.json
+analysis_03_spectrum/outputs/stack/
+analysis_04_morphology/outputs/image.fits
+analysis_08_chemistry/outputs/psf.npz
+analysis_08_chemistry/r0_chain_data/
+analysis_08_chemistry/outputs/**/chain.pkl

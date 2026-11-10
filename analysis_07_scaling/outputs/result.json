@@ -7,10 +7,10 @@
     "reference_sum_s-1": 2.46e+28,
     "xmm_s-1": {
       "H2O": 1.9615840046145475e+28,
-      "CO2": 3.1226346151826403e+27,
-      "CO": 8.679953364989955e+27
+      "CO2": 3.4984857722781433e+27,
+      "CO": 8.446288648082102e+27
     },
-    "xmm_sum_s-1": 3.141842802631807e+28
+    "xmm_sum_s-1": 3.156061446650572e+28
   },
   "cabot_baseline": {
     "proton_density_1au_cm-3": 7.0,
@@ -25,8 +25,11 @@
   "heavy_ion": {
     "cabot_number_flux_cm-2_s-1": 80174.1526276207,
     "cabot_energy_flux_erg_cm-2_s-1": 7.064923469489796e-05,
-    "task06_prior_location_cm-2_s-1": 100000.0,
-    "task06_prior_scale_cm-2_s-1": 38000.0,
+    "task06_prior_midpoint_cm-2_s-1": 81428.27287804335,
+    "task06_prior_bounds_cm-2_s-1": [
+      4312.4987164044305,
+      158544.04703968228
+    ],
     "task06_contemporaneous": false,
     "task06_energy_eV": 501.55168353682575
   },
@@ -49,10 +52,10 @@
       "radius_km": 120000.0,
       "measured_luminosity_erg_s": 7854716063841441.0,
       "inferred_production_rate_s-1": 1.0544148516452363e+29,
-      "task06_prior_inferred_rate_s-1": 9.88671925780543e+28,
-      "xmm_parent_rate_s-1": 3.141842802631807e+28,
-      "missing_rate_s-1": 7.4023057138205555e+28,
-      "missing_fraction": 0.7020297278884594
+      "task06_prior_inferred_rate_s-1": 1.0956317031159356e+29,
+      "xmm_parent_rate_s-1": 3.156061446650572e+28,
+      "missing_rate_s-1": 7.388087069801791e+28,
+      "missing_fraction": 0.7006812411902136
     },
     "135000_km": {
       "method": "Wegmann Eq. 30 approximate Hyakutake-scale",
@@ -60,10 +63,10 @@
       "radius_km": 135000.0,
       "measured_luminosity_erg_s": 9038491143223348.0,
       "inferred_production_rate_s-1": 1.1310823813847452e+29,
-      "task06_prior_inferred_rate_s-1": 1.060559223416882e+29,
-      "xmm_parent_rate_s-1": 3.141842802631807e+28,
-      "missing_rate_s-1": 8.168981011215645e+28,
-      "missing_fraction": 0.7222268815835184
+      "task06_prior_inferred_rate_s-1": 1.1752961502271678e+29,
+      "xmm_parent_rate_s-1": 3.156061446650572e+28,
+      "missing_rate_s-1": 8.154762367196881e+28,
+      "missing_fraction": 0.7209697986112459
     },
     "370_arcsec": {
       "method": "Cabot B2-B7/B11-B12; v=1 km s-1",
@@ -71,19 +74,19 @@
       "radius_km": 505185.63868738565,
       "measured_luminosity_erg_s": 3.251033307100501e+16,
       "inferred_production_rate_s-1": 2.1844932539277543e+29,
-      "task06_prior_inferred_rate_s-1": 2.0385874306466423e+29,
-      "xmm_parent_rate_s-1": 3.141842802631807e+28,
-      "missing_rate_s-1": 1.8703089736645735e+29,
-      "missing_fraction": 0.8561752114829047,
-      "required_heavy_ion_flux_multiple_for_xmm_parents": 41.78878861853971
+      "task06_prior_inferred_rate_s-1": 2.2765827839045167e+29,
+      "xmm_parent_rate_s-1": 3.156061446650572e+28,
+      "missing_rate_s-1": 1.868887109262697e+29,
+      "missing_fraction": 0.8555243216715857,
+      "required_heavy_ion_flux_multiple_for_xmm_parents": 41.41917903968498
     }
   },
   "cabot_370_slow_speed_check": {
     "speed_km_s": 0.37,
     "inferred_production_rate_s-1": 8.082625039427958e+28,
-    "missing_rate_s-1": 4.94078223679615e+28,
-    "missing_fraction": 0.6112843553541648,
-    "required_heavy_ion_flux_multiple_for_xmm_parents": 6.008415000735995
+    "missing_rate_s-1": 4.926563592777386e+28,
+    "missing_fraction": 0.6095251937019288,
+    "required_heavy_ion_flux_multiple_for_xmm_parents": 5.956304921865357
   },
   "end_members": {
     "H2O": {
@@ -98,14 +101,14 @@
       "b12_luminosity_erg_s": 3159655891614426.0,
       "observed_over_prediction": 10.289200528856911,
       "prediction_over_observed": 0.09718928085767378,
-      "b8_over_xmm_measured_rate": 7.620901558689742
+      "b8_over_xmm_measured_rate": 6.802168868209407
     },
     "CO": {
       "b8_production_rate_s-1": 8.555108825375317e+28,
       "b12_luminosity_erg_s": 3.612662126083267e+16,
       "observed_over_prediction": 0.8998996290375948,
       "prediction_over_observed": 1.1112350397004367,
-      "b8_over_xmm_measured_rate": 9.856169112476813
+      "b8_over_xmm_measured_rate": 10.128837862198711
     },
     "N2": {
       "b8_production_rate_s-1": 9.27723988892917e+28,
@@ -122,9 +125,9 @@
   },
   "n2_alternative": {
     "aperture": "135000_km",
-    "missing_rate_s-1": 8.168981011215645e+28,
-    "xmm_CO_rate_s-1": 8.679953364989955e+27,
-    "Q_N2_over_Q_CO": 9.411319010266478
+    "missing_rate_s-1": 8.154762367196881e+28,
+    "xmm_CO_rate_s-1": 8.446288648082102e+27,
+    "Q_N2_over_Q_CO": 9.654846888341403
   },
   "h2_thin_check": {
     "radius_arcmin": 6.0,

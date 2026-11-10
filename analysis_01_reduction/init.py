@@ -28,9 +28,22 @@ def copy_odf(source, target, before):
 
 
 def install_summary(target):
-    source = Path(CFG["summary"])
+    if CFG.get("summary"):
+        source = Path(CFG["summary"])
+    else:
+        summaries = sorted(target.glob("*SUM.SAS"))
+        if not summaries:
+            sas(
+                "odfingest", target, odfdir=target, outdir=target,
+                environment={"SAS_ODF": str(target)},
+            )
+            summaries = sorted(target.glob("*SUM.SAS"))
+        if len(summaries) != 1:
+            raise RuntimeError("expected one SAS ODF summary")
+        source = summaries[0]
     destination = target / source.name
-    shutil.copyfile(source, destination)
+    if source.resolve() != destination.resolve():
+        shutil.copyfile(source, destination)
     text = destination.read_text()
     text = re.sub(r"^PATH\s+.*$", f"PATH {target}/", text, count=1, flags=re.MULTILINE)
     destination.write_text(text)
@@ -64,8 +77,6 @@ def run():
     source = Path(CFG["odf"])
     before = snapshot(source)
     copy_odf(source, work / "odf", before)
-    summary = install_summary(work / "odf")
-    validate_summary(summary)
 
     ccf = work / "ccf.cif"
     if not ccf.exists():
@@ -79,6 +90,8 @@ def run():
             fullpath=True,
             environment={"SAS_ODF": str(work / "odf")},
         )
+    summary = install_summary(work / "odf")
+    validate_summary(summary)
     if snapshot(source) != before:
         raise RuntimeError("the original ODF changed during initialization")
     finish(STAGE)

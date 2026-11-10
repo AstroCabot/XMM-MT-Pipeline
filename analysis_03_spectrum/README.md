@@ -35,3 +35,12 @@ inner-MOS2 image units. The ECF log uncertainty combines the MOS2 profile
 interval with the XMM-SOC-CAL-TN-0018 absolute-area term `ln(1.10)`.
 Outputs are `extraction.tsv`, `spectra.tsv`, `stack/`, `folded.tsv`,
 `result.json`, and `figure2.png`/`figure2.pdf`.
+
+`python sensitivity.py` summarizes the completed donor/capture refits in
+`outputs/sensitivity_fits.json` and writes `outputs/sensitivity.json`. It also
+checks the effect of the mean-energy/ECF ratio on both current chemistry chains
+by rescaling the heavy-ion flux within its uniform prior. This is a sensitivity
+check of retained samples at fixed extracted profile, not a new posterior fit.
+No spectral fit is run by default. To refit one variant using the existing
+spectra and its saved fit parameters as starting values, run, for example,
+`python sensitivity.py --refit hefrac_0.5` in the HEASoft/AtomDB environment.
