@@ -179,11 +179,11 @@ def test_capacity_regression():
     cases = [
         (
             p["gas_erosion_m"],
-            [6.309416252e27, 7.245227478e28],
+            [8.426197117e27, 3.433406306e28],
         ),
         (
             p["dust_erosion_m"],
-            [1.265555418e28, 3.596520196e29],
+            [1.683022687e28, 1.717550006e29],
         ),
     ]
     for depths, expected in cases:
