@@ -234,7 +234,12 @@ def validate_fresh_inputs(frames, groups):
         ROOT / "parameters.json",
         ROOT / "analysis_01_reduction/settings.json",
         REDUCTION / "01_init/ccf.cif",
-        REDUCTION / "01_init/odf" / Path(SOFTWARE["summary"]).name,
+        REDUCTION
+        / "01_init/odf"
+        / Path(
+            SOFTWARE["summary"]
+            or next((REDUCTION / "01_init/odf").glob("*SUM.SAS"), "")
+        ).name,
     ]
     paths += [
         REDUCTION / name

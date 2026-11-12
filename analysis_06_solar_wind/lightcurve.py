@@ -237,7 +237,14 @@ def sas_environment():
     env.update(
         SAS_CCFPATH=SETTINGS["ccf"], SAS_CCF=str(REDUCTION / "outputs/01_init/ccf.cif")
     )
-    summary = REDUCTION / "outputs/01_init/odf" / Path(SETTINGS["summary"]).name
+    summary = (
+        REDUCTION
+        / "outputs/01_init/odf"
+        / Path(
+            SETTINGS["summary"]
+            or next((REDUCTION / "outputs/01_init/odf").glob("*SUM.SAS"), "")
+        ).name
+    )
     if not summary.is_file():
         raise RuntimeError("Task 01 ODF summary is missing")
     env["SAS_ODF"] = str(summary)

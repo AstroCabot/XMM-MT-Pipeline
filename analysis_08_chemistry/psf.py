@@ -300,7 +300,14 @@ def generate(reduction, spectrum, work, soft_band_ev, annulus_edges_arcsec):
     sas_env = {
         "SAS_CCF": str(reduction / "01_init/ccf.cif"),
         "SAS_CCFPATH": settings["ccf"],
-        "SAS_ODF": str(reduction / "01_init/odf" / Path(settings["summary"]).name),
+        "SAS_ODF": str(
+            reduction
+            / "01_init/odf"
+            / Path(
+                settings["summary"]
+                or next((reduction / "01_init/odf").glob("*SUM.SAS"), "")
+            ).name
+        ),
     }
     frame_names = [row["frame"] for row in frames]
     expected_frames = tuple(settings["expected_frames"])

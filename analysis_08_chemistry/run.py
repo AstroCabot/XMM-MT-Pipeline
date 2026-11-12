@@ -236,7 +236,14 @@ def psf_dependencies():
     events = {row["frame"]: row for row in event_rows}
     settings_path = ROOT / "analysis_01_reduction/settings.json"
     settings = json.loads(settings_path.read_text())
-    summary = REDUCTION / "01_init/odf" / Path(settings["summary"]).name
+    summary = (
+        REDUCTION
+        / "01_init/odf"
+        / Path(
+            settings["summary"]
+            or next((REDUCTION / "01_init/odf").glob("*SUM.SAS"), "")
+        ).name
+    )
     expected = set(settings["expected_frames"])
     maps = psf.exposure_maps(REDUCTION, expected, SHARED["soft_band_ev"])
     stacks = psf.detector_exposure_stacks(REDUCTION, SHARED["soft_band_ev"])

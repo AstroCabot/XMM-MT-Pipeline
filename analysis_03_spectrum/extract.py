@@ -22,7 +22,14 @@ SETTINGS = json.loads((ROOT / "analysis_01_reduction/settings.json").read_text()
 SAS_ENV = {
     "SAS_CCF": str(REDUCTION / "01_init/ccf.cif"),
     "SAS_CCFPATH": SETTINGS["ccf"],
-    "SAS_ODF": str(REDUCTION / "01_init/odf" / Path(SETTINGS["summary"]).name),
+    "SAS_ODF": str(
+        REDUCTION
+        / "01_init/odf"
+        / Path(
+            SETTINGS["summary"]
+            or next((REDUCTION / "01_init/odf").glob("*SUM.SAS"), "")
+        ).name
+    ),
 }
 
 

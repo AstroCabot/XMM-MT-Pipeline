@@ -415,7 +415,7 @@ close(orbit.exposure(age[-1]), direct_exposure, relative=2e-4)
 
 source_radius = np.geomspace(0.01, 30, 40)
 q = {"H2O": 1.8e28, "CO2": 3.2e27, "CO": 8.5e27, "H2": 7e28}
-beta = {"H2O": 3.3, "CO2": 0.392, "CO": 1.3, "H2": 0.5}
+beta = {"H2O": 3.3, "CO2": 1.504, "CO": 1.033, "H2": 0.5}
 speed = {name: 0.37 for name in q}
 speed.update(OH=1.2, O_H2O=1.5, O_OH=1.5, H=12, heavy=1.685, H2_photo=11.335)
 actual_chains = {name: chemistry.chains(name, network) for name in q}
@@ -1139,7 +1139,7 @@ class StubTransport:
 theta = np.zeros(20)
 for i, name in enumerate(("H2O", "CO2", "CO")):
     theta[i] = math.log(CONFIG["priors"][f"Qref_{name}"][0])
-theta[3:6] = [3.3, 0.392, 1.3]
+theta[3:6] = [3.3, 1.504, 1.033]
 theta[6:8] = [0.5, 0.0]
 theta[8] = 1e5
 theta[9:13] = 0.37
