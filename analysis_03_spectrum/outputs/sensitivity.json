@@ -37,7 +37,6 @@
     "lower": 4312.4987164044305,
     "upper": 158544.04703968228
   },
-  "method": "At fixed extracted profile, a multiplicative change k in mean energy/ECF is absorbed by Phi -> Phi/k. The uniform prior gives constant weight inside its bounds and zero outside. The retained-sample check does not integrate newly accessible prior support or change detector exposure weights; it is not a new posterior fit.",
   "variants": [
     {
       "variant": "acxmodel_1",

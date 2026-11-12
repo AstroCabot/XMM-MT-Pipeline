@@ -48,8 +48,7 @@ window, with ACE scaled by 1.7, give the bounds of the uniform heavy-ion
 number-flux prior, `4.3e3--1.6e5` cm^-2 s^-1, which Tasks 07 and 08 read from
 `result.json`. These ions supply 97.3% of the intrinsic 0.35--1.10 keV energy
 flux in the Task 03 VACX2 model. ACE CDFs come from SPDF and HIS V04 CDFs from
-SOAR; `result.json` records both input digests. HAPI cannot replace them because
-its CSV rounds the ratio floors and omits the HIS quality flag.
+SOAR; `result.json` records both input digests.
 
 The light curve selects 200--1000 eV PN singles (`PATTERN==0`, `FLAG==0`). The
 15 common 45-arcsec source holes apply to events, OoT events, and exposure. SAS

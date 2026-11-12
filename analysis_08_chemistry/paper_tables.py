@@ -27,23 +27,34 @@ RESULT_ROWS = (
 
 def table(rows, caption, label, columns, header, wide=False):
     environment = "table*" if wide else "table"
-    return "\n".join((
-        rf"\begin{{{environment}}}[!ht]",
-        r"\centering", r"\singlespacing", r"\small",
-        r"\renewcommand{\arraystretch}{0.9}" if wide else "",
-        rf"\setlength{{\tabcolsep}}{{{5 if wide else 8}pt}}",
-        rf"\caption{{{caption}}}",
-        rf"\begin{{tabular}}{{{columns}}}",
-        r"\toprule", header + r"\\", r"\midrule",
-        *rows,
-        r"\bottomrule", r"\end{tabular}", rf"\label{{{label}}}",
-        rf"\end{{{environment}}}", "",
-    ))
+    return "\n".join(
+        (
+            rf"\begin{{{environment}}}[!ht]",
+            r"\centering",
+            r"\singlespacing",
+            r"\small",
+            r"\renewcommand{\arraystretch}{0.9}" if wide else "",
+            rf"\setlength{{\tabcolsep}}{{{5 if wide else 8}pt}}",
+            rf"\caption{{{caption}}}",
+            rf"\begin{{tabular}}{{{columns}}}",
+            r"\toprule",
+            header + r"\\",
+            r"\midrule",
+            *rows,
+            r"\bottomrule",
+            r"\end{tabular}",
+            rf"\label{{{label}}}",
+            rf"\end{{{environment}}}",
+            "",
+        )
+    )
 
 
 def posterior_rows(path):
     with path.open() as stream:
-        values = {row["parameter"]: row for row in csv.DictReader(stream, delimiter="\t")}
+        values = {
+            row["parameter"]: row for row in csv.DictReader(stream, delimiter="\t")
+        }
     rows = []
     for name, label in RESULT_ROWS:
         if name == "scale":
@@ -51,7 +62,11 @@ def posterior_rows(path):
         cells = []
         for key in ("map", "q16", "median", "q84"):
             value = float(values[name][key])
-            number = prior_table.science(value, 2) if name.startswith("Q_") or name in ("phi_heavy", "offset") else f"{value:.2f}"
+            number = (
+                prior_table.science(value, 2)
+                if name.startswith("Q_") or name in ("phi_heavy", "offset")
+                else f"{value:.2f}"
+            )
             cells.append(rf"\({number}\)")
         rows.append(" & ".join((label, *cells)) + r"\\")
     return rows
@@ -71,13 +86,28 @@ def main():
         r"Sampled parameter distribution for the full-profile chemical transport model. The columns give the MAP and central percentiles of the full retained chain. Production rates and $f_{\rm H_2}$ refer to the \xmm\ epoch.",
     )
     tables = (
-        table(prior_table.model_rows(wind, spectrum, background), captions[0], "tab:model",
-              r"@{}p{0.30\textwidth}p{0.30\textwidth}p{0.34\textwidth}@{}",
-              "Quantity & Prior & Source", wide=True),
-        table(prior_table.rate_rows(f107p), captions[1], "tab:photorates", "@{}llr@{}",
-              "Quantity & Value & Source"),
-        table(posterior_rows(OUTPUT / "posterior.tsv"), captions[2], "tab:results",
-              "@{}lcccc@{}", "Quantity & MAP & 16th & 50th & 84th"),
+        table(
+            prior_table.model_rows(wind, spectrum, background),
+            captions[0],
+            "tab:model",
+            r"@{}p{0.30\textwidth}p{0.30\textwidth}p{0.34\textwidth}@{}",
+            "Quantity & Prior & Source",
+            wide=True,
+        ),
+        table(
+            prior_table.rate_rows(f107p),
+            captions[1],
+            "tab:photorates",
+            "@{}llr@{}",
+            "Quantity & Value & Source",
+        ),
+        table(
+            posterior_rows(OUTPUT / "posterior.tsv"),
+            captions[2],
+            "tab:results",
+            "@{}lcccc@{}",
+            "Quantity & MAP & 16th & 50th & 84th",
+        ),
     )
     for number, content in enumerate(tables, 3):
         (OUTPUT / f"table{number}.tex").write_text(content)

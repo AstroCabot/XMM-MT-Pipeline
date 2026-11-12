@@ -32,7 +32,7 @@ In a fresh virtual environment:
 
 About one minute on a normal desktop computer. HEASoft, SAS, and AtomDB
 (full pipeline only) install per their own documentation in one to two hours.
-Stage 08 also needs SAS for its initial PSF calculation.
+Task 08 also needs SAS for its initial PSF calculation.
 
 ## Demo
 

@@ -20,12 +20,11 @@ export LD_LIBRARY_PATH=/home/scabot/miniconda3/envs/xmm/lib:${LD_LIBRARY_PATH:-}
 ```
 
 The run builds the PSF/operator and samples 96 walkers for 5,000 burn-in and
-20,000 retained steps. It uses emcee differential-evolution moves in coordinates where
-every prior is a unit normal: `inference.Gaussianized` maps each parameter
-through its prior CDF, so the likelihood, priors, and posterior are unchanged,
-and chains and log probabilities are reported in the physical parameters.
-Outputs are `result.json`, `chemistry.tsv`,
-`posterior.tsv`, `profile.tsv`, `intrinsic.tsv`, `chain.npz`, `psf.npz`,
+20,000 retained steps with emcee differential-evolution moves.
+`inference.Gaussianized` maps each parameter through its prior CDF to a unit
+normal for sampling; chains and log probabilities are reported in the physical
+parameters. Outputs are `result.json`, `chemistry.tsv`, `posterior.tsv`,
+`profile.tsv`, `intrinsic.tsv`, `chain.npz`, `psf.npz`,
 `figure3.png`/`figure3.pdf`, and `corner.png`.
 
 The baseline water history uses `beta_H2O ~ N(3.3, 0.3)` (Tan et al. 2026). The
@@ -54,8 +53,8 @@ it after Tasks 03, 05, or 06 change.
 
 `python paper_tables.py` exports complete Extended Data Tables 3--5 to
 `outputs/table3.tex`, `table4.tex`, and `table5.tex`, using the same current
-inputs and `outputs/posterior.tsv`. These uncolored LaTeX tables preserve the
-paper's labels and need its macros, `booktabs`, and `setspace`; no fit is run.
+inputs and `outputs/posterior.tsv`. The tables use the paper's labels and
+macros and need `booktabs` and `setspace`.
 
 `log10_H2_ratio >= -0.5` defines the high mode and `<= -1.5` the low mode.
 `parameters.json` defines the priors; `transport.py` and `inference.py` implement

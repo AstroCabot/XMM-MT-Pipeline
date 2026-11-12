@@ -1,5 +1,4 @@
 {
-  "description": "Completed joint PN/MOS donor/capture refits; unaltered fitted scalars archived 2026-10-29. Input hashes checked 2026-11-10. No spectral arrays or duplicated inputs.",
   "input_sha256": {
     "analysis_03_spectrum/outputs/stack/mos1-inner-background.pi": "b0ff0980a3876b2ce208e9b941503dd20c59f1ab8b9043ff7898543cf5db4f54",
     "analysis_03_spectrum/outputs/stack/mos1-inner-source.pi": "d77f108b33dae388cb91702fc4e2eb9bb75d29ef75dd28c2df1d735600665694",

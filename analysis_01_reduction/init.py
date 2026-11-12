@@ -34,7 +34,10 @@ def install_summary(target):
         summaries = sorted(target.glob("*SUM.SAS"))
         if not summaries:
             sas(
-                "odfingest", target, odfdir=target, outdir=target,
+                "odfingest",
+                target,
+                odfdir=target,
+                outdir=target,
                 environment={"SAS_ODF": str(target)},
             )
             summaries = sorted(target.glob("*SUM.SAS"))
