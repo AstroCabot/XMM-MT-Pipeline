@@ -20,6 +20,11 @@ def main():
     wind = solar_wind.products(output=output)
     rows = solar_wind.read_tsv(DATA / "wind" / "lightcurve.tsv")
     result = run6.summarize(wind, rows, BAND_EV, PATTERN)
+    for name in ("ace_swics", "solar_orbiter_his"):
+        result["ion_fraction"][name] = {
+            "f_16_50_84": run6.ION_FRACTION[name]["f_16_50_84"],
+            "source": "shared reference summary; not recomputed in the demo",
+        }
     write_json(output / "result.json", result)
     from figure import draw
 

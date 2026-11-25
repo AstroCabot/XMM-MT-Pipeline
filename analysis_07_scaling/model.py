@@ -1,5 +1,6 @@
 import math
 
+import numpy as np
 from scipy.integrate import quad
 from scipy.optimize import brentq
 
@@ -18,6 +19,7 @@ HEAVY_ION_FRACTION = 1e-3
 PHOTONS_PER_ION = 1.0
 PHOTON_ENERGY_EV = 550.0
 WEGMANN_C_S2_CM2 = 1e-38
+WEGMANN_FAST_H_ERG_CM2_S = 1.10e-4
 
 REFERENCE_Q_S = 1.5e29
 REFERENCE_RADIUS_KM = 2.4
@@ -96,8 +98,17 @@ def invert_luminosity(luminosity_erg_s, r_au, speed_km_s=1.0, energy_flux=None):
     return 10 ** brentq(residual, 24, 32, rtol=1e-12)
 
 
-def empirical_rate(luminosity_erg_s, energy_flux):
-    return math.sqrt(luminosity_erg_s / (WEGMANN_C_S2_CM2 * energy_flux))
+def empirical_rate(luminosity_erg_s, energy_flux, coefficient=WEGMANN_C_S2_CM2):
+    return np.sqrt(luminosity_erg_s / (coefficient * energy_flux))
+
+
+def coefficient_scatter_dex(ratios):
+    return float(np.sqrt(np.mean(np.log10(np.asarray(ratios, float)) ** 2)))
+
+
+def rate_range(rate, *log10_sigmas):
+    spread = 10 ** (0.5 * math.hypot(*log10_sigmas))
+    return np.array([rate / spread, rate * spread])
 
 
 def thin_rate(surface_flux_arcmin2, radius_cm, speed_km_s, energy_flux, sigma_cm2):

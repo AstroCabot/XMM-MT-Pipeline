@@ -28,16 +28,16 @@ MODES = (
 )
 
 
-def values(physical):
+def values(physical, names=inference.PHYSICAL_NAMES, parameters=PARAMETERS):
     physical = np.asarray(physical, float)
     columns = []
-    for name, logarithmic, factor, _ in PARAMETERS:
-        column = factor * physical[:, inference.PHYSICAL_NAMES.index(name)]
+    for name, logarithmic, factor, _ in parameters:
+        column = factor * physical[:, names.index(name)]
         columns.append(np.log10(column) if logarithmic else column)
     return np.column_stack(columns)
 
 
-def draw(physical, log_probability, path, limit=4000):
+def draw(physical, log_probability, path, limit=4000, names=inference.PHYSICAL_NAMES):
     import corner
     import matplotlib
 
@@ -45,18 +45,28 @@ def draw(physical, log_probability, path, limit=4000):
     import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
 
-    matrix = values(physical)
     physical = np.asarray(physical, float)
+    conventional = "log10_H2_ratio" not in names
+    parameters = [
+        item
+        for item in PARAMETERS
+        if item[0] in names
+        and (not conventional or np.ptp(physical[:, names.index(item[0])]) > 0)
+    ]
+    matrix = values(physical, names, parameters)
     log_probability = np.asarray(log_probability, float)
     if len(log_probability) != len(matrix):
         raise ValueError("posterior coordinates and probabilities differ")
 
-    ratio = physical[:, inference.PHYSICAL_NAMES.index("log10_H2_ratio")]
     families = []
-    for label, color, criterion in MODES:
-        indices = np.flatnonzero(criterion(ratio))
-        if len(indices):
-            families.append((label, color, indices))
+    if conventional:
+        families.append(("Conventional", "#008C95", np.arange(len(physical))))
+    else:
+        ratio = physical[:, names.index("log10_H2_ratio")]
+        for label, color, criterion in MODES:
+            indices = np.flatnonzero(criterion(ratio))
+            if len(indices):
+                families.append((label, color, indices))
     if not families:
         raise RuntimeError("no declared H2 mode in posterior draws")
     count = min(limit, *(len(indices) for _, _, indices in families))
@@ -75,7 +85,7 @@ def draw(physical, log_probability, path, limit=4000):
 
     with plt.rc_context(STYLE):
         corner_figure = None
-        labels = [parameter[-1] for parameter in PARAMETERS]
+        labels = [parameter[-1] for parameter in parameters]
         for _, color, rows, _ in selected:
             corner_figure = corner.corner(
                 rows,
@@ -117,8 +127,12 @@ def draw(physical, log_probability, path, limit=4000):
         corner_figure.text(
             0.98,
             0.955,
-            "39/87% conditional contours; transition family omitted\n"
-            "families normalized separately; occupancy is not probability",
+            (
+                "39/87% posterior contours"
+                if conventional
+                else "39/87% conditional contours; transition family omitted\n"
+                "families normalized separately; occupancy is not probability"
+            ),
             ha="right",
             va="top",
             fontsize=8,

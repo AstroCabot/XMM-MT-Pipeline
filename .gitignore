@@ -21,6 +21,8 @@ analysis_01_reduction/outputs/08_figure/*
 # Regenerable task products
 analysis_02_pps_luminosity/outputs/*
 !analysis_02_pps_luminosity/outputs/result.json
+!analysis_02_pps_luminosity/outputs/profiles.tsv
+!analysis_02_pps_luminosity/outputs/luminosities.tsv
 analysis_03_spectrum/outputs/stack/
 analysis_04_morphology/outputs/image.fits
 analysis_08_chemistry/outputs/psf.npz

@@ -20,7 +20,8 @@ export LD_LIBRARY_PATH=/home/scabot/miniconda3/envs/xmm/lib:${LD_LIBRARY_PATH:-}
 ```
 
 The run builds the PSF/operator and samples 96 walkers for 5,000 burn-in and
-20,000 retained steps with emcee differential-evolution moves.
+20,000 retained steps with emcee differential-evolution moves and four workers.
+Set BLAS/OpenMP thread counts to one when using multiple workers.
 `inference.Gaussianized` maps each parameter through its prior CDF to a unit
 normal for sampling; chains and log probabilities are reported in the physical
 parameters. Outputs are `result.json`, `chemistry.tsv`, `posterior.tsv`,
@@ -40,6 +41,19 @@ It samples `beta_H2O ~ N(8.253, 0.560)` and writes its products, except
 `--task08`, `--chain`, and `--output` options. Production stays at the
 perihelion rate before perihelion in both fits. `result.json` records the
 `beta_H2O` prior used.
+
+The conventional model fixes directly released H2 to zero, retaining all
+photochemical daughters, including H2 produced from water. It samples 17
+parameters, omitting the direct-H2 abundance, history and release speed:
+
+```bash
+/home/scabot/miniconda3/envs/xmm/bin/python run.py fit --no-direct-h2
+/home/scabot/miniconda3/envs/xmm/bin/python run.py fit --no-direct-h2 --water-prior frincke
+```
+
+These fits share `outputs/psf.npz` and write to `outputs/no_direct_h2/` and
+`outputs/no_direct_h2/water_frincke/`. Use the same flags with `corner`.
+Their profile uses the overall MAP; H2 mode comparisons are omitted.
 
 `fit` saves `outputs/chain.pkl`, in those unit-normal coordinates, every 500
 steps. `run.py fit --resume` continues it exactly, and `--retained-steps N`

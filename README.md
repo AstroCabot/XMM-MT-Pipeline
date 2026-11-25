@@ -6,7 +6,7 @@ are in `parameters.json`.
 | Task | Result |
 |---|---|
 | `analysis_01_reduction` | Masked EPIC events, ESAS backgrounds, soft-proton models, and comet-frame stacks |
-| `analysis_02_pps_luminosity` | Canned-response PPS luminosity |
+| `analysis_02_pps_luminosity` | PPS broken profiles and preliminary aperture/band luminosities |
 | `analysis_03_spectrum` | Joint PN/MOS VACX2 fit, detector conversion, and Figure 2 |
 | `analysis_04_morphology` | Comet image, Sun-axis slice, and Figure 1 |
 | `analysis_05_radial_profile` | EPIC/PPS density profiles, aperture luminosities, and chemistry annuli |
@@ -20,7 +20,7 @@ are in `parameters.json`.
 
 Python >= 3.12 with the pinned packages in `requirements.txt` (tested with
 Python 3.14.2 and 3.12.4 on Ubuntu 24.04 under WSL2; no non-standard
-hardware). Tasks 01–06 additionally require HEASoft 6.36 with PyXspec,
+hardware). The full reduction and spectral/figure tasks additionally require HEASoft 6.36 with PyXspec,
 SAS 22.1.0 with current CCFs, the ESAS calibration files, AtomDB 3.1.3, ACX2
 v2.5.1 (github.com/AtomDB/ACX2), and roughly 20 GB of disk.
 
@@ -33,10 +33,13 @@ In a fresh virtual environment:
 About one minute on a normal desktop computer. HEASoft, SAS, and AtomDB
 (full pipeline only) install per their own documentation in one to two hours.
 Task 08 also needs SAS for its initial PSF calculation.
+Task 02 reads PPS products directly and requires neither SAS nor a spectral fit.
+Its saved ECF table supports independent narrow-band profiles and aperture
+luminosities; regenerating that table uses PyXspec with standard responses.
 
 ## Demo
 
-`analysis_demo/` reruns stages 02–09 from a bundled ~11 MB data subset:
+`analysis_demo/` reruns stages 02–09 from a bundled ~19 MB data subset:
 
     python analysis_demo/demo.py
 

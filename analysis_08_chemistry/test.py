@@ -23,6 +23,7 @@ from astropy.io import fits
 from astropy.time import Time
 from config import CONFIG
 from scipy.integrate import trapezoid
+from scipy.linalg import expm
 from transport import ARCMIN2_SR, EV_ERG, Orbit, Transport, tau_one_radius
 
 HERE = Path(__file__).resolve().parent
@@ -419,11 +420,40 @@ beta = {"H2O": 3.3, "CO2": 1.504, "CO": 1.033, "H2": 0.5}
 speed = {name: 0.37 for name in q}
 speed.update(OH=1.2, O_H2O=1.5, O_OH=1.5, H=12, heavy=1.685, H2_photo=11.335)
 actual_chains = {name: chemistry.chains(name, network) for name in q}
-fine = Transport(orbit, network, 160, 1.3, 3e9, source_radius, 81920.5, 1, 1)
-fast = Transport(orbit, network, 160, 1.3, 3e9, source_radius, 81920.5, 4, 4)
-fine_tau = fine.source_profile(q, beta, speed, actual_chains, 1e5, 502.2, 1)[1]
-fast_tau = fast.source_profile(q, beta, speed, actual_chains, 1e5, 502.2, 1)[1]
-assert np.allclose(fast_tau, fine_tau, rtol=0.01)
+shells, inner, outer = CONFIG["shells"]
+quadrature = CONFIG["quadrature"]
+stride = quadrature["granddaughter_shell_stride"]
+radial_stride = quadrature["granddaughter_radial_stride"]
+assert (shells, stride, radial_stride) == (320, 8, 4)
+fine = Transport(
+    orbit,
+    network,
+    shells,
+    inner,
+    outer,
+    source_radius,
+    81920.5,
+    stride // 2,
+    radial_stride // 2,
+)
+fast = Transport(
+    orbit,
+    network,
+    shells,
+    inner,
+    outer,
+    source_radius,
+    81920.5,
+    stride,
+    radial_stride,
+)
+for water_beta in (3.3, 8.253):
+    beta["H2O"] = water_beta
+    for h2_rate in (0, 7e28):
+        q["H2"] = h2_rate
+        fine_tau = fine.source_profile(q, beta, speed, actual_chains, 1e5, 502.2, 1)[1]
+        fast_tau = fast.source_profile(q, beta, speed, actual_chains, 1e5, 502.2, 1)[1]
+        assert np.allclose(fast_tau, fine_tau, rtol=2e-3)
 
 
 class FixedOrbit:
@@ -477,6 +507,19 @@ synthetic_network["G"]["rate_1au_s-1"] = 0.0
 stable = transport.density(chains[2], 0, speed)
 stable_flux = 4 * np.pi * (transport.radius * 1e5) ** 2 * 1e5 * stable
 assert np.allclose(stable_flux, 1 - np.exp(-x) * (1 + x), rtol=3e-2, atol=2e-8)
+
+# Unequal daughter speeds have an independent constant-rate matrix solution.
+synthetic_network["G"]["rate_1au_s-1"] = 1e-4
+transport = Transport(
+    FixedOrbit(), synthetic_network, 160, 1, 1e5, np.array([1.0]), 1.0, 4, 1
+)
+speed = {"P": 1.0, "D": 2.0, "G": 7.0}
+loss = np.array([1e-4 / speed[name] for name in ("P", "D", "G")])
+matrix = np.diag(-loss) + np.diag(loss[:-1], -1)
+density = transport.density(chains[2], 0, speed)
+flux = 4 * np.pi * (transport.radius * 1e5) ** 2 * speed["G"] * 1e5 * density
+expected = np.array([expm(matrix * (radius - 1))[2, 0] for radius in transport.radius])
+assert np.allclose(flux, expected, rtol=1e-5, atol=1e-10)
 
 
 class VaryingOrbit(FixedOrbit):
@@ -1014,6 +1057,7 @@ with tempfile.TemporaryDirectory(dir=HERE) as folder:
     run.corner_product = lambda: calls.append("corner")
     run.shutil.which = lambda name: "/sas/psfgen"
     saved_water = products.OUTPUT, CONFIG["priors"]["beta_H2O"]
+    saved_direct_h2 = CONFIG.get("direct_h2", True)
     try:
         preserved = [run.OUTPUT / name for name in ("chain.npz", "result.json")]
         for path in preserved:
@@ -1075,6 +1119,24 @@ with tempfile.TemporaryDirectory(dir=HERE) as folder:
         assert run.OUTPUT.is_dir()
         assert CONFIG["priors"]["beta_H2O"] == [8.253, 0.56]
         assert all(path.read_text() == "keep" for path in preserved)
+        for water in ("tan", "frincke"):
+            calls.clear()
+            run.OUTPUT = products.OUTPUT = base
+            sys.argv[:] = ["run.py", "fit", "--no-direct-h2", "--water-prior", water]
+            try:
+                run.main()
+            except InterruptedError:
+                pass
+            else:
+                raise AssertionError("conventional fit did not reach the PSF")
+            target = base / "no_direct_h2"
+            if water == "frincke":
+                target /= "water_frincke"
+            assert run.OUTPUT == products.OUTPUT == target
+            assert calls == ["dependencies", base / "psf.npz"]
+            assert CONFIG["direct_h2"] is False
+            assert CONFIG["priors"]["beta_H2O"][0] == (3.3 if water == "tan" else 8.253)
+            assert all(path.read_text() == "keep" for path in preserved)
     finally:
         (
             run.OUTPUT,
@@ -1087,6 +1149,7 @@ with tempfile.TemporaryDirectory(dir=HERE) as folder:
             arguments,
         ) = saved
         products.OUTPUT, CONFIG["priors"]["beta_H2O"] = saved_water
+        CONFIG["direct_h2"] = saved_direct_h2
         sys.argv[:] = arguments
 
 with tempfile.TemporaryDirectory(dir=HERE) as folder:
@@ -1101,7 +1164,7 @@ with tempfile.TemporaryDirectory(dir=HERE) as folder:
         log_probability=log_probability,
     )
     captured = {}
-    run.diagnostic.draw = lambda physical, lp, path: captured.update(
+    run.diagnostic.draw = lambda physical, lp, path, **kwargs: captured.update(
         physical=physical, log_probability=lp, path=path
     )
     try:
@@ -1222,6 +1285,113 @@ close(loglike, -0.5 * np.log(2 * np.pi * variance).sum(), relative=2e-12)
 assert len(physical) == len(inference.PHYSICAL_NAMES) == 21
 q = dict(zip(inference.PHYSICAL_NAMES, physical))
 close(q["Q_H2"] / (q["Q_H2O"] + q["Q_CO2"] + q["Q_CO"]), 1.0)
+
+# Conventional model: remove direct H2 and its three sampled parameters.
+conventional_config = json.loads(json.dumps(CONFIG))
+conventional_config["direct_h2"] = False
+conventional = inference.Posterior(
+    posterior.data,
+    posterior.error,
+    posterior.ecf,
+    StubTransport(),
+    {},
+    posterior.psf,
+    conventional_config,
+    500,
+    0.05,
+    0.4,
+    2e3,
+    1.6e5,
+)
+assert len(conventional.coords) == 17
+assert set(inference.COORDS) - set(conventional.coords) == {
+    "beta_H2",
+    "log10_H2_ratio",
+    "v_H2",
+}
+active = [inference.COORDS.index(name) for name in conventional.coords]
+conventional_theta = theta[active]
+removed_prior = (
+    inference.uniform_logpdf(theta[6], *CONFIG["priors"]["beta_H2"])
+    + inference.uniform_logpdf(theta[7], *CONFIG["priors"]["log10_H2_ratio"])
+    + inference.positive_normal_logpdf(theta[12], *CONFIG["priors"]["parent_velocity"])
+)
+close(
+    conventional.log_prior(conventional_theta),
+    posterior.log_prior(theta) - removed_prior,
+)
+conv_physical = conventional.predict(conventional_theta)[-1]
+assert len(conv_physical) == len(conventional.physical_names) == 18
+assert conv_physical[conventional.physical_names.index("Q_H2")] == 0
+shared_physical = [
+    inference.PHYSICAL_NAMES.index(name) for name in conventional.physical_names
+]
+expected_physical = physical[shared_physical].copy()
+expected_physical[3] = 0
+assert np.array_equal(conv_physical, expected_physical)
+conv_gaussian = inference.Gaussianized(conventional)
+conv_draws = np.random.default_rng(19).normal(size=(50, 17))
+assert np.allclose(
+    conv_gaussian.latent(conv_gaussian.physical(conv_draws)), conv_draws, atol=1e-7
+)
+conv_walkers = inference.draw_walkers(conventional, 48, np.random.default_rng(19))
+assert conv_walkers.shape == (48, 17)
+assert all(math.isfinite(conventional.log_prior(row)) for row in conv_walkers)
+conv_chain, conv_lp, conv_ll, _ = inference.sample(
+    conventional, conv_walkers, 5, 10, 1, 19
+)
+assert conv_chain.shape == (10, 48, 17)
+for step, walker in ((0, 0), (9, 7)):
+    expected_lp, expected_ll = conventional.evaluate(conv_chain[step, walker])
+    close(conv_lp[step, walker], expected_lp)
+    close(conv_ll[step, walker], expected_ll)
+
+real_orbit = run.make_orbit()
+real_source = np.geomspace(0.1, 12, 15)
+real_transport = Transport(real_orbit, network, 320, 1.3, 3e9, real_source, 81920.5)
+real_chains = {
+    name: chemistry.chains(name, network) for name in ("H2O", "CO2", "CO", "H2")
+}
+without_photolytic_h2 = {
+    name: [chain for chain in paths if all(species != "H2" for species, _ in chain[0])]
+    for name, paths in real_chains.items()
+}
+for water_beta in (3.3, 8.253):
+    trial = conventional_theta.copy()
+    trial[conventional.coords.index("beta_H2O")] = water_beta
+    _, q0, beta0, speed0, _ = inference.unpack(trial, conventional_config, real_orbit)
+    assert q0["H2"] == 0 and "H2" not in beta0 and "H2" not in speed0
+    source0, tau0 = real_transport.source_profile(
+        q0, beta0, speed0, real_chains, 1e5, 500, 1
+    )
+    full_trial = theta.copy()
+    full_trial[active] = trial
+    _, full_q, full_beta, full_speed, _ = inference.unpack(
+        full_trial, CONFIG, real_orbit
+    )
+    full_q["H2"] = 0
+    reference_source, reference_tau = real_transport.source_profile(
+        full_q,
+        full_beta,
+        full_speed,
+        real_chains,
+        1e5,
+        500,
+        1,
+    )
+    assert np.array_equal(source0, reference_source) and np.array_equal(
+        tau0, reference_tau
+    )
+    _, reduced_tau = real_transport.source_profile(
+        q0,
+        beta0,
+        speed0,
+        without_photolytic_h2,
+        1e5,
+        500,
+        1,
+    )
+    assert np.all(tau0 > reduced_tau)
 
 # Count-space data equation.
 events, qpb, soft_proton, oot, exposure, background = (
@@ -1380,6 +1550,8 @@ with tempfile.TemporaryDirectory(dir=HERE) as folder:
 # Posterior and recoil-product serialization.
 class ProductPosterior:
     config = json.loads(json.dumps(CONFIG))
+    coords = inference.COORDS
+    physical_names = inference.PHYSICAL_NAMES
     transport = type(
         "T",
         (),
@@ -1396,7 +1568,7 @@ class ProductPosterior:
         model = factor * np.linspace(1, 2, 10)
         source = factor * np.array([3.0, 2.0, 1.0])
         tau = factor * np.array([2.0, 1.0, 0.5])
-        physical_value = inference.unpack(value, CONFIG, self.transport.orbit)[-1]
+        physical_value = inference.unpack(value, self.config, self.transport.orbit)[-1]
         return model, np.ones(10), model, source, tau, physical_value
 
 
@@ -1430,7 +1602,7 @@ with tempfile.TemporaryDirectory(dir=HERE) as folder:
     products.OUTPUT, products.PROFILE = Path(folder), Path(folder)
     products.figure.draw = lambda *args, **kwargs: figure_arguments.update(kwargs)
     products.diagnostic.draw = (
-        lambda physical, probability, path: corner_arguments.update(
+        lambda physical, probability, path, **kwargs: corner_arguments.update(
             physical=physical, probability=probability, path=path
         )
     )
@@ -1522,6 +1694,61 @@ with tempfile.TemporaryDirectory(dir=HERE) as folder:
             [float(row[name]) for name in ("q16", "median", "q84")],
             np.quantile(expected_values[:, i], (0.16, 0.5, 0.84)),
         )
+
+
+class ConventionalProductPosterior(ProductPosterior):
+    config = conventional_config
+    coords = inference.coordinates(config)
+    physical_names = inference.physical_names(config)
+
+
+with tempfile.TemporaryDirectory(dir=HERE) as folder:
+    original_output = products.OUTPUT
+    original_draw, original_corner = products.figure.draw, products.diagnostic.draw
+    products.OUTPUT = Path(folder)
+    products.figure.draw = lambda *args, **kwargs: None
+    products.diagnostic.draw = lambda *args, **kwargs: None
+    conventional_chain = product_chain[:2, :4, active]
+    conventional_logp = np.array([[-3, -2, 0, -1], [-4, -5, -6, -7]], float)
+    conventional_logl = np.arange(8.0).reshape(2, 4)
+    try:
+        products.write(
+            product_inputs,
+            ConventionalProductPosterior(),
+            rows,
+            conventional_chain,
+            conventional_logp,
+            conventional_logl,
+            0.25,
+        )
+        with np.load(Path(folder) / "chain.npz", allow_pickle=False) as saved:
+            assert tuple(saved["coordinate_names"]) == conventional.coords
+            assert tuple(saved["physical_names"]) == conventional.physical_names
+            assert saved["samples"].shape == (8, 17)
+            assert np.all(saved["physical_draws"][:, 3] == 0)
+            assert tuple(saved["best_labels"]) == ("overall_ml", "overall_map")
+            assert np.array_equal(
+                saved["best_coordinates"], conventional_chain.reshape(8, 17)[[7, 2]]
+            )
+        saved_result = json.loads((Path(folder) / "result.json").read_text())
+        assert saved_result["direct_h2"] is False
+        assert saved_result["sampled_parameter_count"] == 17
+        for key in ("Q_H2", "H2_fraction"):
+            assert all(value == 0 for value in saved_result["posterior"][key].values())
+        assert "maximum_likelihood_high" not in saved_result
+        assert "sampled_delta_log_likelihood_high_minus_low" not in saved_result
+        assert "jitter_prior_checks" not in saved_result
+        saved_profile = figure.table(Path(folder) / "profile.tsv")
+        expected_model = ConventionalProductPosterior().predict(
+            conventional_chain[0, 2]
+        )[2]
+        assert np.array_equal(
+            saved_profile["physical_model_ct_s_arcmin2"], expected_model
+        )
+    finally:
+        products.OUTPUT = original_output
+        products.figure.draw, products.diagnostic.draw = original_draw, original_corner
+
 assert CONFIG["fixed_velocity_km_s"] == {
     "heavy_daughter": 1.685,
     "photolytic_H2": 11.335,
@@ -1546,6 +1773,34 @@ assert np.mean(np.abs(means)) < 0.15
 assert np.linalg.norm(means) < np.linalg.norm(np.mean(start, axis=0))
 assert np.all(np.isfinite(blobs))
 assert 0.1 < acceptance < 0.8
+
+
+class WorkerToy:
+    def __init__(self):
+        self.offset = np.linspace(-0.2, 0.2, 4)
+        self.immutable_grid = np.ones((256, 256))
+
+    def log_probability(self, value):
+        likelihood = -0.5 * float(np.sum((value - self.offset) ** 2))
+        return likelihood, likelihood
+
+
+worker_model = WorkerToy()
+worker_start = np.random.default_rng(81).normal(size=(12, 4))
+worker_serial = inference.run_sampler(worker_model, worker_start, 5, 20, 1, seed=81)
+worker_parallel = inference.run_sampler(worker_model, worker_start, 5, 20, 2, seed=81)
+for serial_value, parallel_value in zip(worker_serial, worker_parallel, strict=True):
+    assert np.array_equal(serial_value, parallel_value)
+with tempfile.TemporaryDirectory(dir=HERE) as folder:
+    checkpoint = Path(folder) / "chain.pkl"
+    first = inference.run_sampler(worker_model, worker_start, 5, 8, 2, 81, checkpoint)
+    resumed = inference.run_sampler(
+        worker_model, worker_start, 5, 20, 2, 81, checkpoint
+    )
+    assert np.array_equal(first[0], resumed[0][:8])
+    for complete, restarted in zip(worker_parallel, resumed, strict=True):
+        assert np.array_equal(complete, restarted)
+    assert not checkpoint.with_suffix(".tmp").exists()
 
 
 class BoundedToy:

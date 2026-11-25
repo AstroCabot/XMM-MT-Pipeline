@@ -7,9 +7,9 @@
     "elements_source": "JPL SBDB solution 54, 2026-08-29",
     "observation_epoch_source": "accepted XMM frame GTIs"
   },
-  "shells": [160, 1.3, 3000000000.0],
+  "shells": [320, 1.3, 3000000000.0],
   "quadrature": {
-    "granddaughter_shell_stride": 4,
+    "granddaughter_shell_stride": 8,
     "granddaughter_radial_stride": 4,
     "psf_radial_order": 4,
     "psf_azimuth_order": 384
@@ -39,7 +39,7 @@
     "walkers": 96,
     "burn_steps": 5000,
     "retained_steps": 20000,
-    "processes": 20,
+    "processes": 4,
     "seed": 20260829
   }
 }

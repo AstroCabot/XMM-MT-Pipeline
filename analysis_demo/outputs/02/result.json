@@ -1,91 +1,550 @@
 {
-  "epoch_utc": "2025-12-03T21:25:46.398",
-  "distance_au": 1.8815323353,
-  "selection": {
-    "energy_eV": [
-      350,
-      1100
-    ],
-    "aperture_arcsec": 370.0,
-    "background_arcsec": [
-      600.0,
-      720.0
-    ],
-    "event_filter": "exact CCD GTIs; RAWY>12; PATTERN<=4; FLAG==0",
-    "source_mask_radius_arcsec": 45
-  },
-  "response": {
-    "arf": "response.arf",
-    "arf_model": "flat extended source",
-    "rmf": "calibration/epn_e4_ff20_sdY9_v22.0.rmf"
-  },
-  "bands": [
-    {
+  "bands": {
+    "200-500": {
+      "model": "broken_power_law",
+      "alpha_inner": 0.39170288671954595,
+      "alpha_outer": 1.0683461100042555,
+      "break_radius_arcmin": 0.7902339604660729,
+      "normalization_at_break_ct_s_arcmin2": 0.06761290473445385,
+      "sky_ct_s_arcmin2": 1.2209824206012812e-08,
+      "soft_to_hard": 0.3546959157712609,
+      "poisson_deviance": 89.92473483976025,
+      "degrees_of_freedom": 42,
       "energy_eV": [
-        350,
+        200,
         500
       ],
-      "source_counts": 21269,
-      "background_counts": 5238,
-      "background_scale": 1.5581448930424946,
-      "source_exposure_s_arcmin2": 2481037.5983835934,
-      "background_exposure_s_arcmin2": 1592089.6085716523,
-      "raw_masked_flux_erg_cm-2_s-1": 7.372387549730961e-13,
-      "annulus_self_subtraction_factor_1_over_r": 1.3692031419668764,
-      "source_mask_fill_factor_1_over_r": 1.0358068318589542
+      "pattern_max": 0,
+      "exposure_weights": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "ecf_counts_cm2_per_erg": 862191381826.5261,
+      "apertures": {
+        "110000_km": {
+          "radius_arcsec": 80.60847367392238,
+          "model_rate_ct_s": 0.3470606550871955,
+          "energy_flux_erg_cm2_s": 4.0253319901198515e-13,
+          "luminosity_erg_s": 4007612896587523.0
+        },
+        "120000_km": {
+          "radius_arcsec": 87.93651588424288,
+          "model_rate_ct_s": 0.3864828175940247,
+          "energy_flux_erg_cm2_s": 4.4825641468982516e-13,
+          "luminosity_erg_s": 4462832364879152.0
+        },
+        "135000_km": {
+          "radius_arcsec": 98.92857877771965,
+          "model_rate_ct_s": 0.44520162792144086,
+          "energy_flux_erg_cm2_s": 5.163605636816907e-13,
+          "luminosity_erg_s": 5140875980861227.0
+        },
+        "190000_km": {
+          "radius_arcsec": 139.2328041049559,
+          "model_rate_ct_s": 0.657029571166355,
+          "energy_flux_erg_cm2_s": 7.620460897839849e-13,
+          "luminosity_erg_s": 7586916420082561.0
+        },
+        "370_arcsec": {
+          "radius_arcsec": 370,
+          "model_rate_ct_s": 1.811171964157085,
+          "energy_flux_erg_cm2_s": 2.1006611784035376e-12,
+          "luminosity_erg_s": 2.0914142859754784e+16
+        },
+        "480_arcsec": {
+          "radius_arcsec": 480,
+          "model_rate_ct_s": 2.341075876658902,
+          "energy_flux_erg_cm2_s": 2.7152624417323727e-12,
+          "luminosity_erg_s": 2.703310138347716e+16
+        }
+      },
+      "ecf_source": "fixed spectrum folded through standard response; ecfs.json"
     },
-    {
+    "500-1000": {
+      "model": "broken_power_law",
+      "alpha_inner": 0.4205919158315433,
+      "alpha_outer": 1.015924906205445,
+      "break_radius_arcmin": 0.7663537177656687,
+      "normalization_at_break_ct_s_arcmin2": 0.04522364976028343,
+      "sky_ct_s_arcmin2": 3.266382571234629e-12,
+      "soft_to_hard": 0.3339440016424442,
+      "poisson_deviance": 55.411326554539876,
+      "degrees_of_freedom": 42,
       "energy_eV": [
         500,
         1000
       ],
-      "source_counts": 30642,
-      "background_counts": 8670,
-      "background_scale": 1.55936936735194,
-      "source_exposure_s_arcmin2": 2480494.774142943,
-      "background_exposure_s_arcmin2": 1590491.3826280183,
-      "raw_masked_flux_erg_cm-2_s-1": 1.3417584670660156e-12,
-      "annulus_self_subtraction_factor_1_over_r": 1.3691727976708563,
-      "source_mask_fill_factor_1_over_r": 1.03580768250367
+      "pattern_max": 4,
+      "exposure_weights": [
+        0.0,
+        1.0,
+        0.0
+      ],
+      "ecf_counts_cm2_per_erg": 753861602466.4747,
+      "apertures": {
+        "110000_km": {
+          "radius_arcsec": 80.60847367392238,
+          "model_rate_ct_s": 0.23072051165752014,
+          "energy_flux_erg_cm2_s": 3.060515496513574e-13,
+          "luminosity_erg_s": 3047043425024074.0
+        },
+        "120000_km": {
+          "radius_arcsec": 87.93651588424288,
+          "model_rate_ct_s": 0.2570609953131659,
+          "energy_flux_erg_cm2_s": 3.409922915189168e-13,
+          "luminosity_erg_s": 3394912788516245.0
+        },
+        "135000_km": {
+          "radius_arcsec": 98.92857877771965,
+          "model_rate_ct_s": 0.2965070158512513,
+          "energy_flux_erg_cm2_s": 3.9331757298838863e-13,
+          "luminosity_erg_s": 3915862298641952.0
+        },
+        "190000_km": {
+          "radius_arcsec": 139.2328041049559,
+          "model_rate_ct_s": 0.4405946684162907,
+          "energy_flux_erg_cm2_s": 5.844503380657122e-13,
+          "luminosity_erg_s": 5818776483520175.0
+        },
+        "370_arcsec": {
+          "radius_arcsec": 370,
+          "model_rate_ct_s": 1.2560827130996277,
+          "energy_flux_erg_cm2_s": 1.6661980249292342e-12,
+          "luminosity_erg_s": 1.6588635941991558e+16
+        },
+        "480_arcsec": {
+          "radius_arcsec": 480,
+          "model_rate_ct_s": 1.6414328206099256,
+          "energy_flux_erg_cm2_s": 2.1773662635681494e-12,
+          "luminosity_erg_s": 2.167781723318302e+16
+        }
+      },
+      "ecf_source": "fixed spectrum folded through standard response; ecfs.json"
     },
-    {
+    "1000-2000": {
+      "model": "broken_power_law",
+      "alpha_inner": -0.3090963388285435,
+      "alpha_outer": 0.3281431540324124,
+      "break_radius_arcmin": 0.6155274348873246,
+      "normalization_at_break_ct_s_arcmin2": 0.0010272519232608379,
+      "sky_ct_s_arcmin2": 5.381999820591873e-05,
+      "soft_to_hard": 0.35340834787529857,
+      "poisson_deviance": 41.95437107676839,
+      "degrees_of_freedom": 42,
       "energy_eV": [
         1000,
+        2000
+      ],
+      "pattern_max": 4,
+      "exposure_weights": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "ecf_counts_cm2_per_erg": 540615893031.54156,
+      "apertures": {
+        "110000_km": {
+          "radius_arcsec": 80.60847367392238,
+          "model_rate_ct_s": 0.004989982944421215,
+          "energy_flux_erg_cm2_s": 9.230181740384168e-15,
+          "luminosity_erg_s": 91895514385905.03
+        },
+        "120000_km": {
+          "radius_arcsec": 87.93651588424288,
+          "model_rate_ct_s": 0.005834539000973053,
+          "energy_flux_erg_cm2_s": 1.0792392669507857e-14,
+          "luminosity_erg_s": 107448856773844.73
+        },
+        "135000_km": {
+          "radius_arcsec": 98.92857877771965,
+          "model_rate_ct_s": 0.007192233708599667,
+          "energy_flux_erg_cm2_s": 1.3303777786236937e-14,
+          "luminosity_erg_s": 132452159375481.2
+        },
+        "190000_km": {
+          "radius_arcsec": 139.2328041049559,
+          "model_rate_ct_s": 0.013046129247126627,
+          "energy_flux_erg_cm2_s": 2.4131975058982342e-14,
+          "luminosity_erg_s": 240257486100237.3
+        },
+        "370_arcsec": {
+          "radius_arcsec": 370,
+          "model_rate_ct_s": 0.06851741349408079,
+          "energy_flux_erg_cm2_s": 1.2673954720395766e-13,
+          "luminosity_erg_s": 1261816528745796.2
+        },
+        "480_arcsec": {
+          "radius_arcsec": 480,
+          "model_rate_ct_s": 0.10609347200442043,
+          "energy_flux_erg_cm2_s": 1.9624556616250002e-13,
+          "luminosity_erg_s": 1953817135534051.2
+        }
+      },
+      "ecf_source": "fixed spectrum folded through standard response; ecfs.json"
+    },
+    "200-350": {
+      "model": "broken_power_law",
+      "alpha_inner": 0.4168309265483899,
+      "alpha_outer": 1.089134492344686,
+      "break_radius_arcmin": 0.8480863225910841,
+      "normalization_at_break_ct_s_arcmin2": 0.037588307575339666,
+      "sky_ct_s_arcmin2": 1.2754043900894674e-08,
+      "soft_to_hard": 0.23369161575696742,
+      "poisson_deviance": 75.7590183525731,
+      "degrees_of_freedom": 42,
+      "energy_eV": [
+        200,
+        350
+      ],
+      "pattern_max": 0,
+      "exposure_weights": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "ecf_counts_cm2_per_erg": 1136466674373.9846,
+      "apertures": {
+        "110000_km": {
+          "radius_arcsec": 80.60847367392238,
+          "model_rate_ct_s": 0.20436181141246065,
+          "energy_flux_erg_cm2_s": 1.798220889539344e-13,
+          "luminosity_erg_s": 1790305307865151.0
+        },
+        "120000_km": {
+          "radius_arcsec": 87.93651588424288,
+          "model_rate_ct_s": 0.22774985108414816,
+          "energy_flux_erg_cm2_s": 2.0040169784090036e-13,
+          "luminosity_erg_s": 1995195503716242.2
+        },
+        "135000_km": {
+          "radius_arcsec": 98.92857877771965,
+          "model_rate_ct_s": 0.262511613647365,
+          "energy_flux_erg_cm2_s": 2.309892754153727e-13,
+          "luminosity_erg_s": 2299724846050505.0
+        },
+        "190000_km": {
+          "radius_arcsec": 139.2328041049559,
+          "model_rate_ct_s": 0.38729655917758465,
+          "energy_flux_erg_cm2_s": 3.4079007146507354e-13,
+          "luminosity_erg_s": 3392899489494648.0
+        },
+        "370_arcsec": {
+          "radius_arcsec": 370,
+          "model_rate_ct_s": 1.057044255193993,
+          "energy_flux_erg_cm2_s": 9.301146078711538e-13,
+          "luminosity_erg_s": 9260203399267690.0
+        },
+        "480_arcsec": {
+          "radius_arcsec": 480,
+          "model_rate_ct_s": 1.3610406813133378,
+          "energy_flux_erg_cm2_s": 1.1976072083794787e-12,
+          "luminosity_erg_s": 1.1923354657772902e+16
+        }
+      },
+      "ecf_source": "fixed spectrum folded through standard response; ecfs.json"
+    },
+    "200-300": {
+      "model": "broken_power_law",
+      "alpha_inner": 0.3838129109575519,
+      "alpha_outer": 1.081800191186136,
+      "break_radius_arcmin": 0.7950291310108881,
+      "normalization_at_break_ct_s_arcmin2": 0.027636494016233602,
+      "sky_ct_s_arcmin2": 4.885113403287922e-09,
+      "soft_to_hard": 0.17484795705517853,
+      "poisson_deviance": 54.177613432095505,
+      "degrees_of_freedom": 42,
+      "energy_eV": [
+        200,
+        300
+      ],
+      "pattern_max": 0,
+      "exposure_weights": [
+        1.0,
+        0.0,
+        0.0
+      ],
+      "ecf_counts_cm2_per_erg": 1394477419156.289,
+      "apertures": {
+        "110000_km": {
+          "radius_arcsec": 80.60847367392238,
+          "model_rate_ct_s": 0.14188506514235583,
+          "energy_flux_erg_cm2_s": 1.017478398669242e-13,
+          "luminosity_erg_s": 1012999564387399.8
+        },
+        "120000_km": {
+          "radius_arcsec": 87.93651588424288,
+          "model_rate_ct_s": 0.15797957074107108,
+          "energy_flux_erg_cm2_s": 1.132894434652478e-13,
+          "luminosity_erg_s": 1127907550962106.0
+        },
+        "135000_km": {
+          "radius_arcsec": 98.92857877771965,
+          "model_rate_ct_s": 0.18191897270156665,
+          "energy_flux_erg_cm2_s": 1.3045673612386955e-13,
+          "luminosity_erg_s": 1298824791147644.8
+        },
+        "190000_km": {
+          "radius_arcsec": 139.2328041049559,
+          "model_rate_ct_s": 0.2680045709762735,
+          "energy_flux_erg_cm2_s": 1.9218996829538213e-13,
+          "luminosity_erg_s": 1913439680070680.8
+        },
+        "370_arcsec": {
+          "radius_arcsec": 370,
+          "model_rate_ct_s": 0.7324994386185595,
+          "energy_flux_erg_cm2_s": 5.252859806519843e-13,
+          "luminosity_erg_s": 5229737262975015.0
+        },
+        "480_arcsec": {
+          "radius_arcsec": 480,
+          "model_rate_ct_s": 0.9441877313028642,
+          "energy_flux_erg_cm2_s": 6.770907282773593e-13,
+          "luminosity_erg_s": 6741102451833767.0
+        }
+      },
+      "ecf_source": "fixed spectrum folded through standard response; ecfs.json"
+    },
+    "350-1100": {
+      "model": "broken_power_law",
+      "alpha_inner": 0.4009060483329222,
+      "alpha_outer": 1.0130223808698022,
+      "break_radius_arcmin": 0.7422304012641058,
+      "normalization_at_break_ct_s_arcmin2": 0.08082720726028764,
+      "sky_ct_s_arcmin2": 5.893638066329381e-09,
+      "soft_to_hard": 0.5246598821005847,
+      "poisson_deviance": 64.90780527978322,
+      "degrees_of_freedom": 42,
+      "energy_eV": [
+        350,
         1100
       ],
-      "source_counts": 681,
-      "background_counts": 537,
-      "background_scale": 1.5701018285244066,
-      "source_exposure_s_arcmin2": 2541225.1470490615,
-      "background_exposure_s_arcmin2": 1618293.6407169332,
-      "raw_masked_flux_erg_cm-2_s-1": 2.9245268468422142e-15,
-      "annulus_self_subtraction_factor_1_over_r": 1.3709812128046903,
-      "source_mask_fill_factor_1_over_r": 1.0358587421302718
+      "pattern_max": 4,
+      "exposure_weights": [
+        0.38904104981369925,
+        0.588501082182193,
+        0.022457868004107807
+      ],
+      "ecf_counts_cm2_per_erg": 756233882941.8618,
+      "apertures": {
+        "110000_km": {
+          "radius_arcsec": 80.60847367392238,
+          "model_rate_ct_s": 0.40063682218733304,
+          "energy_flux_erg_cm2_s": 5.29778989310551e-13,
+          "luminosity_erg_s": 5274469571983929.0
+        },
+        "120000_km": {
+          "radius_arcsec": 87.93651588424288,
+          "model_rate_ct_s": 0.44629384122050286,
+          "energy_flux_erg_cm2_s": 5.901531937240814e-13,
+          "luminosity_erg_s": 5875554006318182.0
+        },
+        "135000_km": {
+          "radius_arcsec": 98.92857877771965,
+          "model_rate_ct_s": 0.5146876410950746,
+          "energy_flux_erg_cm2_s": 6.805932036433801e-13,
+          "luminosity_erg_s": 6775973030164444.0
+        },
+        "190000_km": {
+          "radius_arcsec": 139.2328041049559,
+          "model_rate_ct_s": 0.7646879624725207,
+          "energy_flux_erg_cm2_s": 1.0111791863884376e-12,
+          "luminosity_erg_s": 1.0067280805851054e+16
+        },
+        "370_arcsec": {
+          "radius_arcsec": 370,
+          "model_rate_ct_s": 2.182596196318777,
+          "energy_flux_erg_cm2_s": 2.886139123822586e-12,
+          "luminosity_erg_s": 2.8734346390228604e+16
+        },
+        "480_arcsec": {
+          "radius_arcsec": 480,
+          "model_rate_ct_s": 2.853678328343876,
+          "energy_flux_erg_cm2_s": 3.7735393675335525e-12,
+          "luminosity_erg_s": 3.7569286389861016e+16
+        }
+      },
+      "ecf_source": "fixed spectrum folded through standard response; ecfs.json"
     }
+  },
+  "summed_bands": {
+    "200-1000": {
+      "110000_km": {
+        "radius_arcsec": 80.60847367392238,
+        "energy_flux_erg_cm2_s": 7.085847486633425e-13,
+        "luminosity_erg_s": 7054656321611597.0
+      },
+      "120000_km": {
+        "radius_arcsec": 87.93651588424288,
+        "energy_flux_erg_cm2_s": 7.892487062087419e-13,
+        "luminosity_erg_s": 7857745153395397.0
+      },
+      "135000_km": {
+        "radius_arcsec": 98.92857877771965,
+        "energy_flux_erg_cm2_s": 9.096781366700793e-13,
+        "luminosity_erg_s": 9056738279503180.0
+      },
+      "190000_km": {
+        "radius_arcsec": 139.2328041049559,
+        "energy_flux_erg_cm2_s": 1.3464964278496971e-12,
+        "luminosity_erg_s": 1.3405692903602736e+16
+      },
+      "370_arcsec": {
+        "radius_arcsec": 370,
+        "energy_flux_erg_cm2_s": 3.766859203332772e-12,
+        "luminosity_erg_s": 3.7502778801746344e+16
+      },
+      "480_arcsec": {
+        "radius_arcsec": 480,
+        "energy_flux_erg_cm2_s": 4.8926287053005225e-12,
+        "luminosity_erg_s": 4.871091861666018e+16
+      }
+    },
+    "200-2000": {
+      "110000_km": {
+        "radius_arcsec": 80.60847367392238,
+        "energy_flux_erg_cm2_s": 7.178149304037266e-13,
+        "luminosity_erg_s": 7146551835997502.0
+      },
+      "120000_km": {
+        "radius_arcsec": 87.93651588424288,
+        "energy_flux_erg_cm2_s": 8.000410988782497e-13,
+        "luminosity_erg_s": 7965194010169242.0
+      },
+      "135000_km": {
+        "radius_arcsec": 98.92857877771965,
+        "energy_flux_erg_cm2_s": 9.229819144563161e-13,
+        "luminosity_erg_s": 9189190438878662.0
+      },
+      "190000_km": {
+        "radius_arcsec": 139.2328041049559,
+        "energy_flux_erg_cm2_s": 1.3706284029086795e-12,
+        "luminosity_erg_s": 1.3645950389702974e+16
+      },
+      "370_arcsec": {
+        "radius_arcsec": 370,
+        "energy_flux_erg_cm2_s": 3.89359875053673e-12,
+        "luminosity_erg_s": 3.876459533049214e+16
+      },
+      "480_arcsec": {
+        "radius_arcsec": 480,
+        "energy_flux_erg_cm2_s": 5.0888742714630225e-12,
+        "luminosity_erg_s": 5.066473575219422e+16
+      }
+    }
+  },
+  "epoch_utc": "2025-12-03T21:25:46.398",
+  "distance_au": 1.8815323353,
+  "good_time_s": 31445.356277108192,
+  "fit_range_arcmin": [
+    0,
+    12
   ],
-  "flux_luminosity": {
-    "raw_masked": {
-      "flux_erg_cm-2_s-1": 2.081921748885954e-12,
-      "luminosity_erg_s": 2.072757345481205e+16
+  "selection": "PPS CCD GTIs; RAWY>12; FLAG==0; PI in (low, high]; no field-source masks",
+  "calibration": {
+    "method": "direct standard-response ECFs in every band",
+    "photon_index": 1.7,
+    "nh_cm-2": 3e+20,
+    "response_conversion": {
+      "method": "predicted band count rate / model band energy flux, directly from standard responses",
+      "model": "phabs*powerlaw",
+      "photon_index": 1.7,
+      "nh_cm-2": 3e+20,
+      "abundances": "angr",
+      "cross_sections": "bcmc",
+      "flux_convention": "absorbed; no deabsorption correction",
+      "response_url": "https://heasarc.gsfc.nasa.gov/FTP/xmm/data/responses/xmm_ao26_calfiles.tar.gz",
+      "singles_rmf_url": "https://heasarc.gsfc.nasa.gov/FTP/xmm/data/CCF/extras/responses/PN/epn_e4_ff20_sY9_v22.0.rmf",
+      "pattern_fraction_url": "https://heasarc.gsfc.nasa.gov/FTP/xmm/data/CCF/EPN_QUANTUMEF_0018.CCF",
+      "singles_response": "epoch e4, full frame, Y9; standard ARF multiplied by CCF FRAC_S/FRAC_SD at the same position",
+      "response_files": [
+        {
+          "name": "pn-thin-5.rmf",
+          "sha256": "7a59f530a07f8d5c9c8345468924ebe535dc20ae474f25bce76a57094122fe0e"
+        },
+        {
+          "name": "pn-thin-5.arf",
+          "sha256": "3143ad79866badcca7fb22e370b402e93135e48b6fe444a774b27bde6c80b30b"
+        },
+        {
+          "name": "epn_e4_ff20_sY9_v22.0.rmf",
+          "sha256": "f47615ad5244f32bd461d506730db09e8fd4878b04bbab1b4cc395f2a655844f"
+        },
+        {
+          "name": "EPN_QUANTUMEF_0018.CCF",
+          "sha256": "141befe886a07966544ef8256c5b3da26a4810a0f496f8fd9e1d27aab770bae8"
+        }
+      ],
+      "xspec_version": [
+        "2.1.5",
+        "12.15.1"
+      ],
+      "approximation": "standard point-source responses, including their aperture losses, used directly for preliminary luminosities",
+      "bands": {
+        "200-500": {
+          "pattern_max": 0,
+          "model_rate_ct_s": 431.1893531150217,
+          "model_energy_flux_erg_cm2_s": 5.001086327278755e-10,
+          "ecf_counts_cm2_per_erg": 862191381826.5261
+        },
+        "500-1000": {
+          "pattern_max": 4,
+          "model_rate_ct_s": 642.0165874705206,
+          "model_energy_flux_erg_cm2_s": 8.516372041897066e-10,
+          "ecf_counts_cm2_per_erg": 753861602466.4747
+        },
+        "1000-2000": {
+          "pattern_max": 4,
+          "model_rate_ct_s": 644.4266395322505,
+          "model_energy_flux_erg_cm2_s": 1.192023112599563e-09,
+          "ecf_counts_cm2_per_erg": 540615893031.54156
+        },
+        "200-350": {
+          "pattern_max": 0,
+          "model_rate_ct_s": 217.72537602097077,
+          "model_energy_flux_erg_cm2_s": 1.9158095959206496e-10,
+          "ecf_counts_cm2_per_erg": 1136466674373.9846
+        },
+        "200-300": {
+          "pattern_max": 0,
+          "model_rate_ct_s": 145.94096637482997,
+          "model_energy_flux_erg_cm2_s": 1.0465638551761542e-10,
+          "ecf_counts_cm2_per_erg": 1394477419156.289
+        },
+        "350-1100": {
+          "pattern_max": 4,
+          "model_rate_ct_s": 986.7366673558793,
+          "model_energy_flux_erg_cm2_s": 1.3048035662159536e-09,
+          "ecf_counts_cm2_per_erg": 756233882941.8618
+        }
+      }
     },
-    "annulus_self_subtraction_corrected_masked": {
-      "flux_erg_cm-2_s-1": 2.8505382852036112e-12,
-      "luminosity_erg_s": 2.8379905115996e+16
+    "exposure_approximation": "reuse native PPS maps; sub-bands below 500 eV use EXPMAP1000"
+  },
+  "inputs": [
+    {
+      "path": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/MT_PPS/P0963720201PNS003PIEVLI0000.FTZ",
+      "sha256": "e8ad1a781bcc089e0b9a764f34301ed6cca2ba74ca56d285f8d3ab85488cf82a"
     },
-    "full_aperture": {
-      "flux_erg_cm-2_s-1": 2.9526088011408763e-12,
-      "luminosity_erg_s": 2.939611723722118e+16
+    {
+      "path": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/MT_PPS/P0963720201PNS003IMAGE_2000.FTZ",
+      "sha256": "fbe5d1a50ec1408d7ec8f4f6f849ee627052b567aadfe198d45adb630f44fc4c"
+    },
+    {
+      "path": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/MT_PPS/P0963720201PNS003EXPMAP1000.FTZ",
+      "sha256": "abb9346b996e77d798cfb508a2792a10cff6ceff216162679301d272d8127f44"
+    },
+    {
+      "path": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/MT_PPS/P0963720201PNS003EXPMAP2000.FTZ",
+      "sha256": "685b693565d8d16a8ac4ed78c4547db41c7bbdace2ad9eda5ff737198ea16425"
+    },
+    {
+      "path": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/MT_PPS/P0963720201PNS003EXPMAP3000.FTZ",
+      "sha256": "0e782d486d70ca7193e1384fde739df0605b179eeefb74efa236e4b93562ad12"
+    },
+    {
+      "path": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Cambridge/X3I/analysis_repro/analysis_02_pps_luminosity/ecfs.json",
+      "sha256": "469a89df8bb75281937c50841383595ca042747f1b4ecb7368b1dae9dceea46c"
     }
-  },
-  "correction_factors": {
-    "annulus_self_subtraction_exposure_weighted_1_over_r": 1.3691860833525311,
-    "source_mask_fill_1_over_r": 1.0358074530930126,
-    "raw_masked_to_full_aperture_1_over_r": 1.4182131498077826
-  },
-  "units": {
-    "counts": "count",
-    "background_scale": "dimensionless",
-    "flux": "erg cm-2 s-1",
-    "luminosity": "erg s-1"
-  }
+  ]
 }

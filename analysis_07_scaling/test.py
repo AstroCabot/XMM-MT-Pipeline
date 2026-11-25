@@ -5,12 +5,19 @@ import os
 import tempfile
 from pathlib import Path
 
+import numpy as np
+
+from analysis_05_radial_profile.run import aperture_rows
+
 from .model import (
     ARCMIN2_PER_SR,
+    EV_TO_ERG,
     ICE_PROPERTIES,
     KAPPA,
     SIGMA_CM2,
+    WEGMANN_FAST_H_ERG_CM2_S,
     cabot_energy_flux,
+    coefficient_scatter_dex,
     empirical_rate,
     ion_energy_flux,
     ion_number_flux_cm2_s,
@@ -26,14 +33,15 @@ from .run import (
     FINAL_PRODUCTS,
     HERE,
     H2_SIGMA_CM2,
-    MATCHED_NAMES,
-    N2_APERTURE,
     SCIENCE_APERTURE,
     SCIENCE_NAME,
     SHARED,
+    WEGMANN_APERTURE_KM,
+    aperture_luminosity,
     calculate,
     parent_rates,
     physical_radius_km,
+    read_calibration,
     require_current_profile,
     write_outputs,
 )
@@ -44,7 +52,6 @@ def close(left, right, tolerance=1e-10):
 
 
 def fixtures():
-    small, large = MATCHED_NAMES
     task5 = {
         "band_eV": SHARED["soft_band_ev"],
         "epic": {
@@ -57,18 +64,6 @@ def fixtures():
                 "break_radius_arcmin": 0.6282113792932272,
             },
         },
-        "apertures": {
-            small: {
-                "radius_arcsec": 87.8901,
-                "radius_km": 120000.0,
-                "luminosity_erg_s": 6.128e15,
-            },
-            large: {
-                "radius_arcsec": 98.8764,
-                "radius_km": 135000.0,
-                "luminosity_erg_s": 7.0565e15,
-            },
-        },
     }
     task3 = {
         "heliocentric_distance_au": 1.8688,
@@ -76,10 +71,20 @@ def fixtures():
         "distance_au": 1.88252630197118,
         "mean_photon_energy_eV": 502.2,
         "mos2_ecf_erg_cm2_per_count": 8.672299198621948e-12,
+        "mos2_ecf_sigma_ln": 0.09594655763290505,
         "regions": {"inner": {"luminosity_erg_s": 3.0e16}},
     }
     task6 = {
-        "heavy_ion_prior": {**SHARED["heavy_ion_prior"], "lower": 2e3, "upper": 1.6e5}
+        "heavy_ion_prior": {**SHARED["heavy_ion_prior"], "lower": 2e3, "upper": 1.6e5},
+        "proton_flux": {
+            "stereo_a": {"median": 8.34e7},
+            "solar_orbiter": {"median": 1.40e8},
+            "wind": {"median": 6.02e7},
+        },
+        "ion_fraction": {
+            "ace_swics": {"f_16_50_84": [1.386e-4, 2.492e-4, 4.396e-4]},
+            "solar_orbiter_his": {"f_16_50_84": [1.131e-4, 2.020e-4, 3.554e-4]},
+        },
     }
     return task5, task3, task6
 
@@ -121,20 +126,76 @@ def test_wegmann_and_thin_limits():
     )
 
 
+def test_calibration_scatter():
+    ratios = read_calibration()
+    assert len(ratios) == 48
+    close(ratios.min(), 0.33351311373456954, 1e-9)
+    close(ratios.max(), 4.651661408201318, 1e-9)
+    assert 0.35 < coefficient_scatter_dex(ratios) < 0.36
+    close(coefficient_scatter_dex([10.0, 0.1]), 1.0)
+    assert coefficient_scatter_dex(np.ones(5)) == 0
+
+
+def test_wegmann_estimates():
+    task5, task3, task6 = fixtures()
+    broken = task5["epic"]["broken"]
+    theta = [
+        math.log(broken["normalization_at_break_ct_s_arcmin2"]),
+        broken["alpha_inner"],
+        broken["alpha_outer"],
+        math.log(broken["break_radius_arcmin"]),
+    ]
+    reference = aperture_rows(
+        theta, task3["distance_au"], task3["mos2_ecf_erg_cm2_per_count"]
+    )[0]
+    close(aperture_luminosity(task5, task3, reference[2])[1], reference[5], 1e-9)
+
+    result, rows = calculate(task5, task3, task6)
+    wegmann = result["wegmann"]
+    assert wegmann["aperture_km"] == WEGMANN_APERTURE_KM == 1.1e5
+    assert wegmann["calibration_points"] == 48
+    assert 0.35 < wegmann["coefficient_log10_sigma"] < 0.36
+    close(wegmann["luminosity_log10_sigma"], 0.09594655763290505 / math.log(10))
+    estimates = wegmann["estimates"]
+    fast, scaled, measured = (
+        estimates[name]
+        for name in ("w04_fast_wind", "w04_fast_wind_scaled", "measured")
+    )
+    close(fast["energy_flux_erg_cm-2_s-1"], WEGMANN_FAST_H_ERG_CM2_S)
+    close(
+        scaled["inferred_production_rate_s-1"] / fast["inferred_production_rate_s-1"],
+        task3["heliocentric_distance_au"],
+    )
+    inputs = wegmann["measured_inputs"]
+    assert 0.18 < inputs["proton_flux_log10_sigma"] < 0.19
+    assert 0.24 < inputs["ion_fraction_log10_sigma"] < 0.26
+    close(
+        measured["energy_flux_erg_cm-2_s-1"],
+        inputs["ion_fraction"]
+        * inputs["proton_flux_cm-2_s-1"]
+        * task3["mean_photon_energy_eV"]
+        * EV_TO_ERG,
+    )
+    for estimate in (fast, scaled, measured):
+        low, high = estimate["inferred_production_rate_range_s-1"]
+        q = estimate["inferred_production_rate_s-1"]
+        close(low * high, q * q)
+        spread = math.hypot(
+            wegmann["luminosity_log10_sigma"],
+            wegmann["coefficient_log10_sigma"],
+            estimate["energy_flux_log10_sigma"],
+        )
+        close(high / low, 10**spread)
+    assert [row["name"] for row in rows[:3]] == list(estimates)
+    assert all(row["method"] == "Wegmann Eq. 30" for row in rows[:3])
+
+
 def test_paper_calculation():
     task5, task3, task6 = fixtures()
     result, rows = calculate(task5, task3, task6)
     _, reference, xmm = parent_rates(task3["heliocentric_distance_au"])
     close(reference, 2.46e28)
     close(xmm, 3.156043338888213e28)
-    close(
-        result["apertures"][MATCHED_NAMES[0]]["inferred_production_rate_s-1"],
-        9.313365487643337e28,
-    )
-    close(
-        result["apertures"][MATCHED_NAMES[1]]["inferred_production_rate_s-1"],
-        9.994059738837967e28,
-    )
     assert (
         result["parent_rates"]["reference_epoch_utc"]
         == SHARED["spherex"]["reference_epoch_utc"]
@@ -173,11 +234,7 @@ def test_paper_calculation():
     }
 
     end = result["end_members"]
-    assert 32 < end["H2O"]["observed_over_prediction"] < 34
-    assert 9 < end["CO2"]["observed_over_prediction"] < 10
-    assert 38 < end["H2"]["prediction_over_observed"] < 40
     assert 9 < end["CO"]["b8_over_xmm_measured_rate"] < 11
-    close(result["n2_alternative"]["Q_N2_over_Q_CO"], 8.09590215717307)
     thin = result["h2_thin_check"]
     rates = thin["production_rate_s-1"]
     close(rates["1.0_km_s"], 1.4618168793339194e29)
@@ -198,17 +255,12 @@ def test_paper_calculation():
         result["h2_thin_check"]["radius_km"],
         physical_radius_km(360, task3["distance_au"]),
     )
-    assert [row["name"] for row in rows[:3]] == [*MATCHED_NAMES, SCIENCE_NAME]
-    assert result["n2_alternative"]["aperture"] == N2_APERTURE
+    assert rows[3]["name"] == SCIENCE_NAME
     assert SCIENCE_APERTURE == 370
-    assert all(
-        "Wegmann" in row["method"] and "approximate" in row["method"]
-        for row in rows[:2]
-    )
-    assert rows[2]["method"] == "Cabot B2-B7/B11-B12; v=1 km s-1"
+    assert rows[3]["method"] == "Cabot B2-B7/B11-B12; v=1 km s-1"
     assert all(
         row["method"] == "Cabot B2-B9/B11-B12; R=1.3 km; v=0.37 km s-1"
-        for row in rows[3:]
+        for row in rows[4:]
     )
 
     with tempfile.TemporaryDirectory(dir=HERE) as folder:
@@ -236,6 +288,52 @@ def test_paper_calculation():
             "prediction_over_observed",
         )
         assert FINAL_PRODUCTS == ("result.json", "scaling.tsv")
+
+
+def test_end_member_inputs():
+    task5, task3, task6 = fixtures()
+    result, rows = calculate(task5, task3, task6)
+    end = result["end_members"]
+    assumptions = result["end_member_assumptions"]
+    wegmann = result["wegmann"]
+    measured = wegmann["estimates"]["measured"]
+    assert assumptions["aperture_km"] == 110000
+    close(assumptions["energy_flux_erg_cm-2_s-1"], measured["energy_flux_erg_cm-2_s-1"])
+    low, high = measured["inferred_production_rate_range_s-1"]
+    close(assumptions["luminosity_ratio_log10_sigma"], math.log10(high / low))
+    for row in rows:
+        if row["kind"] == "end_member":
+            assert row["radius_km"] == 110000
+            close(row["radius_arcsec"], wegmann["aperture_arcsec"])
+            close(row["measured_luminosity_erg_s"], wegmann["luminosity_erg_s"])
+
+    task3["regions"]["inner"]["luminosity_erg_s"] *= 2
+    repeated, _ = calculate(task5, task3, task6)
+    assert repeated["end_members"] == end
+    assert repeated["end_member_assumptions"] == assumptions
+
+    for monitor in task6["proton_flux"].values():
+        monitor["median"] *= 2
+    repeated, _ = calculate(task5, task3, task6)
+    for name, original in end.items():
+        updated = repeated["end_members"][name]
+        close(updated["b8_production_rate_s-1"], original["b8_production_rate_s-1"])
+        close(updated["b12_luminosity_erg_s"], 2 * original["b12_luminosity_erg_s"])
+        close(
+            updated["observed_over_prediction"],
+            original["observed_over_prediction"] / 2,
+        )
+        close(
+            updated["prediction_over_observed"],
+            2 * original["prediction_over_observed"],
+        )
+
+    task5["epic"]["broken"]["normalization_at_break_ct_s_arcmin2"] *= 2
+    repeated, _ = calculate(task5, task3, task6)
+    for name, original in end.items():
+        updated = repeated["end_members"][name]
+        close(updated["observed_over_prediction"], original["observed_over_prediction"])
+        close(updated["prediction_over_observed"], original["prediction_over_observed"])
 
 
 def test_profile_freshness():
@@ -274,7 +372,10 @@ def test_profile_freshness():
 def main():
     test_cabot_equations()
     test_wegmann_and_thin_limits()
+    test_calibration_scatter()
+    test_wegmann_estimates()
     test_paper_calculation()
+    test_end_member_inputs()
     test_profile_freshness()
 
 

@@ -121,9 +121,9 @@ def point_record(posterior, theta, log_probability, log_likelihood):
     }
 
 
-def orbit_output():
+def orbit_output(config=CONFIG):
     return {
-        name: CONFIG["orbit"][name]
+        name: config["orbit"][name]
         for name in ("perihelion_q_au", "eccentricity", "perihelion_jd_tdb")
     }
 
@@ -141,30 +141,35 @@ def mode_selection(theta, log_likelihood):
 
 
 def write(inputs, posterior, reactions, chain, logp, logl, acceptance_fraction):
+    config = posterior.config
+    direct_h2 = config.get("direct_h2", True)
     flat = chain.reshape(-1, chain.shape[-1])
     flat_lp, flat_ll = logp.ravel(), logl.ravel()
-    ratio_index = inference.COORDS.index("log10_H2_ratio")
-    high, high_ml, low_ml = mode_selection(flat, flat_ll)
-    low = flat[:, ratio_index] <= -1.5
     overall_ml = int(np.argmax(flat_ll))
-    high_map = int(np.flatnonzero(high)[np.argmax(flat_lp[high])])
-    low_map = (
-        None if low_ml is None else int(np.flatnonzero(low)[np.argmax(flat_lp[low])])
-    )
-    best_theta = flat[high_map]
+    overall_map = int(np.argmax(flat_lp))
+    if direct_h2:
+        high, high_ml, low_ml = mode_selection(flat, flat_ll)
+        low = flat[:, posterior.coords.index("log10_H2_ratio")] <= -1.5
+        high_map = int(np.flatnonzero(high)[np.argmax(flat_lp[high])])
+        low_map = (
+            None
+            if low_ml is None
+            else int(np.flatnonzero(low)[np.argmax(flat_lp[low])])
+        )
+    best_theta = flat[high_map if direct_h2 else overall_map]
 
     stride = max(1, chain.shape[0] // 500)
     theta = chain[::stride].reshape(-1, chain.shape[-1])
     lp, ll = logp[::stride].ravel(), logl[::stride].ravel()
     physical = np.array(
-        [inference.unpack(row, CONFIG, posterior.transport.orbit)[-1] for row in theta]
+        [inference.unpack(row, config, posterior.transport.orbit)[-1] for row in theta]
     )
     q = physical[:, :4]
     values = np.c_[physical, q.sum(axis=1), q[:, 3] / q.sum(axis=1)]
-    map_physical = inference.unpack(best_theta, CONFIG, posterior.transport.orbit)[-1]
+    map_physical = inference.unpack(best_theta, config, posterior.transport.orbit)[-1]
     map_q = map_physical[:4]
     map_values = np.r_[map_physical, map_q.sum(), map_q[3] / map_q.sum()]
-    names = inference.PHYSICAL_NAMES + ("Q_total", "H2_fraction")
+    names = posterior.physical_names + ("Q_total", "H2_fraction")
     units = {name: "1" for name in names}
     units.update(
         {name: "s^-1" for name in ("Q_H2O", "Q_CO2", "Q_CO", "Q_H2", "Q_total")}
@@ -234,22 +239,25 @@ def write(inputs, posterior, reactions, chain, logp, logl, acceptance_fraction):
         ],
     )
 
-    keep = physical
-    best = [("overall_ml", overall_ml), ("high_ml", high_ml)]
-    if low_ml is not None:
-        best.append(("low_ml", low_ml))
-    best.append(("high_map", high_map))
-    if low_map is not None:
-        best.append(("low_map", low_map))
+    best = [("overall_ml", overall_ml)]
+    if direct_h2:
+        best.append(("high_ml", high_ml))
+        if low_ml is not None:
+            best.append(("low_ml", low_ml))
+        best.append(("high_map", high_map))
+        if low_map is not None:
+            best.append(("low_map", low_map))
+    else:
+        best.append(("overall_map", overall_map))
     best_index = np.array([index for _, index in best])
     np.savez_compressed(
         OUTPUT / "chain.npz",
         samples=theta.astype("f4"),
-        coordinate_names=np.asarray(inference.COORDS),
+        coordinate_names=np.asarray(posterior.coords),
         log_probability=lp.astype("f4"),
         log_likelihood=ll.astype("f4"),
-        physical_draws=keep.astype("f4"),
-        physical_names=np.asarray(inference.PHYSICAL_NAMES),
+        physical_draws=physical.astype("f4"),
+        physical_names=np.asarray(posterior.physical_names),
         best_labels=np.asarray([label for label, _ in best]),
         best_coordinates=flat[best_index],
         best_log_probability=flat_lp[best_index],
@@ -263,43 +271,54 @@ def write(inputs, posterior, reactions, chain, logp, logl, acceptance_fraction):
     radius, status = tau_one_radius(posterior.transport.source_radius, tau)
     result = {
         "xmm_heliocentric_distance_au": posterior.transport.orbit.current_r_au,
-        "xmm_observation_jd_tdb": CONFIG["orbit"]["observation_jd_tdb"],
-        "orbit": orbit_output(),
+        "xmm_observation_jd_tdb": config["orbit"]["observation_jd_tdb"],
+        "orbit": orbit_output(config),
         "f107p_sfu": inputs["f107p"],
-        "photons_per_captured_ion": CONFIG["photons_per_captured_ion"],
-        "beta_H2O_prior": CONFIG["priors"]["beta_H2O"],
+        "photons_per_captured_ion": config["photons_per_captured_ion"],
+        "beta_H2O_prior": config["priors"]["beta_H2O"],
         "mean_acceptance_fraction": float(acceptance_fraction),
         "background": {"model": "continuous broken-law B", **inputs["background"]},
         "posterior": summary,
         "maximum_likelihood": point_record(
             posterior, flat[overall_ml], flat_lp[overall_ml], flat_ll[overall_ml]
         ),
-        "maximum_likelihood_high": point_record(
-            posterior, flat[high_ml], flat_lp[high_ml], flat_ll[high_ml]
-        ),
-        "maximum_a_posteriori_high": point_record(
-            posterior, best_theta, flat_lp[high_map], flat_ll[high_map]
-        ),
-        "maximum_a_posteriori_low": (
-            None
-            if low_map is None
-            else point_record(
-                posterior, flat[low_map], flat_lp[low_map], flat_ll[low_map]
-            )
-        ),
-        "sampled_delta_log_likelihood_high_minus_low": (
-            None if low_ml is None else float(flat_ll[high_ml] - flat_ll[low_ml])
-        ),
-        "sampled_delta_log_probability_high_minus_low": (
-            None if low_map is None else float(flat_lp[high_map] - flat_lp[low_map])
-        ),
         "tau_one_radius_arcmin": radius,
         "tau_one_status": status,
-        "jitter_prior_checks": jitter_checks(physical),
         "fixed_input_checks": sensitivity_checks(posterior, best_theta, model),
     }
+    if direct_h2:
+        result.update(
+            maximum_likelihood_high=point_record(
+                posterior, flat[high_ml], flat_lp[high_ml], flat_ll[high_ml]
+            ),
+            maximum_a_posteriori_high=point_record(
+                posterior, best_theta, flat_lp[high_map], flat_ll[high_map]
+            ),
+            maximum_a_posteriori_low=(
+                None
+                if low_map is None
+                else point_record(
+                    posterior, flat[low_map], flat_lp[low_map], flat_ll[low_map]
+                )
+            ),
+            sampled_delta_log_likelihood_high_minus_low=(
+                None if low_ml is None else float(flat_ll[high_ml] - flat_ll[low_ml])
+            ),
+            sampled_delta_log_probability_high_minus_low=(
+                None if low_map is None else float(flat_lp[high_map] - flat_lp[low_map])
+            ),
+            jitter_prior_checks=jitter_checks(physical),
+        )
+    else:
+        result.update(
+            direct_h2=False,
+            sampled_parameter_count=len(posterior.coords),
+            maximum_a_posteriori=point_record(
+                posterior, best_theta, flat_lp[overall_map], flat_ll[overall_map]
+            ),
+        )
     (OUTPUT / "result.json").write_text(json.dumps(result, indent=2) + "\n")
-    scale = map_physical[inference.PHYSICAL_NAMES.index("scale")]
+    scale = map_physical[posterior.physical_names.index("scale")]
     figure.draw(
         PROFILE / "profile.tsv",
         OUTPUT / "profile.tsv",
@@ -312,4 +331,4 @@ def write(inputs, posterior, reactions, chain, logp, logl, acceptance_fraction):
         output=OUTPUT,
         ecf=posterior.ecf,
     )
-    diagnostic.draw(physical, lp, OUTPUT / "corner.png")
+    diagnostic.draw(physical, lp, OUTPUT / "corner.png", names=posterior.physical_names)

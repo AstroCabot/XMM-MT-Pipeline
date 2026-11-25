@@ -3,8 +3,13 @@ import json
 import math
 from pathlib import Path
 
+import numpy as np
+
+from analysis_05_radial_profile.fit import integrated_broken
+
 from .model import (
     AU_KM,
+    EV_TO_ERG,
     HEAVY_ION_FRACTION,
     ICE_PROPERTIES,
     KAPPA,
@@ -15,7 +20,9 @@ from .model import (
     SIGMA_CM2,
     SOLAR_WIND_SPEED_CM_S,
     WEGMANN_C_S2_CM2,
+    WEGMANN_FAST_H_ERG_CM2_S,
     cabot_energy_flux,
+    coefficient_scatter_dex,
     empirical_rate,
     ion_energy_flux,
     ion_number_flux_cm2_s,
@@ -23,6 +30,7 @@ from .model import (
     luminosity,
     molecular_energy_kj,
     production_rate,
+    rate_range,
     thin_rate,
     thin_tau,
 )
@@ -31,6 +39,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 OUTPUT = HERE / "outputs"
 FINAL_PRODUCTS = ("result.json", "scaling.tsv")
+CALIBRATION = HERE / "wegmann2004_fig19.tsv"
 TASK5 = ROOT / "analysis_05_radial_profile/outputs/result.json"
 TASK3 = ROOT / "analysis_03_spectrum/outputs/result.json"
 TASK6 = ROOT / "analysis_06_solar_wind/outputs/result.json"
@@ -45,9 +54,9 @@ END_MEMBER_SPEED_KM_S = 0.37
 H2_SIGMA_CM2 = float(SHARED["h2_single_capture_cross_section_cm2"])
 SCIENCE_APERTURE = float(SHARED["science_aperture_radius_arcsec"])
 SCIENCE_NAME = f"{SCIENCE_APERTURE:g}_arcsec"
-MATCHED_APERTURES_KM = tuple(map(float, SHARED["matched_apertures_km"]))
-MATCHED_NAMES = tuple(f"{radius:g}_km" for radius in MATCHED_APERTURES_KM)
-N2_APERTURE = f"{max(MATCHED_APERTURES_KM):g}_km"
+WEGMANN_APERTURE_KM = 1.1e5
+WIND_MONITORS = ("stereo_a", "solar_orbiter", "wind")
+ION_INSTRUMENTS = ("ace_swics", "solar_orbiter_his")
 THIN_RADIUS_ARCMIN = 6.0
 PARENTS = {
     name: (values["reference_rate_s-1"]["median"], values["beta"]["mean"])
@@ -69,8 +78,52 @@ def parent_rates(r_au):
 
 def missing(inferred, measured):
     # A negative production deficit is physically zero.
-    value = max(0.0, inferred - measured)
+    value = np.maximum(0.0, inferred - measured)
     return value, value / inferred
+
+
+def read_calibration(path=CALIBRATION):
+    with path.open(newline="") as stream:
+        rows = list(csv.DictReader(stream, delimiter="\t"))
+    hg2 = np.array([float(row["h_g2_1e54_erg_s-3_cm-2"]) for row in rows])
+    lx = np.array([float(row["luminosity_1e16_erg_s"]) for row in rows])
+    if len(rows) != 48 or np.any(hg2 <= 0) or np.any(lx <= 0):
+        raise ValueError("unexpected Wegmann Fig. 19 points")
+    return lx * 1e16 / (WEGMANN_C_S2_CM2 * hg2 * 1e54)
+
+
+def aperture_luminosity(task5, task3, radius_km):
+    broken = task5["epic"]["broken"]
+    distance = float(task3["distance_au"])
+    arcsec = math.degrees(math.atan(radius_km / (distance * AU_KM))) * 3600
+    rate = integrated_broken(
+        float(broken["normalization_at_break_ct_s_arcmin2"]),
+        float(broken["alpha_inner"]),
+        float(broken["alpha_outer"]),
+        float(broken["break_radius_arcmin"]),
+        arcsec / 60,
+    )
+    flux = rate * float(task3["mos2_ecf_erg_cm2_per_count"])
+    return arcsec, flux * 4 * math.pi * (distance * AU_KM * 1e5) ** 2
+
+
+def measured_energy_flux(task6, photon_energy_ev):
+    fluxes = np.log10([task6["proton_flux"][name]["median"] for name in WIND_MONITORS])
+    ions = np.log10(
+        [task6["ion_fraction"][name]["f_16_50_84"] for name in ION_INSTRUMENTS]
+    )
+    flux, fraction = 10 ** fluxes.mean(), 10 ** ions[:, 1].mean()
+    flux_sigma = float(fluxes.std(ddof=1))
+    fraction_sigma = float(np.mean(ions[:, 2] - ions[:, 0]) / 2)
+    inputs = {
+        "proton_flux_cm-2_s-1": flux,
+        "proton_flux_log10_sigma": flux_sigma,
+        "ion_fraction": fraction,
+        "ion_fraction_log10_sigma": fraction_sigma,
+        "photon_energy_eV": photon_energy_ev,
+    }
+    energy_flux = fraction * flux * photon_energy_ev * EV_TO_ERG
+    return inputs, energy_flux, math.hypot(flux_sigma, fraction_sigma)
 
 
 def model_surface_flux(task5, task3, radius_arcmin):
@@ -81,7 +134,7 @@ def model_surface_flux(task5, task3, radius_arcmin):
     return rate * float(task3["mos2_ecf_erg_cm2_per_count"])
 
 
-def calculate(task5, task3, task6):
+def calculate(task5, task3, task6, ratios=None):
     fit_band = task3.get("fit_band_keV", [])
     if (
         task5.get("band_eV") != SHARED["soft_band_ev"]
@@ -102,29 +155,47 @@ def calculate(task5, task3, task6):
     cabot_phi = ion_number_flux_cm2_s(r_au)
     cabot_h = cabot_energy_flux(r_au)
     xmm_rates, reference_sum, xmm_sum = parent_rates(r_au)
+    ratios = read_calibration() if ratios is None else np.asarray(ratios, float)
+    wegmann_arcsec, wegmann_lx = aperture_luminosity(task5, task3, WEGMANN_APERTURE_KM)
+    lx_sigma = float(task3["mos2_ecf_sigma_ln"]) / math.log(10)
+    c_sigma = coefficient_scatter_dex(ratios)
+    measured, measured_h, measured_sigma = measured_energy_flux(task6, mean_energy)
+    energy_fluxes = {
+        "w04_fast_wind": (WEGMANN_FAST_H_ERG_CM2_S, 0.0),
+        "w04_fast_wind_scaled": (WEGMANN_FAST_H_ERG_CM2_S / r_au**2, 0.0),
+        "measured": (measured_h, measured_sigma),
+    }
 
-    rows, apertures = [], {}
-    for name in MATCHED_NAMES:
-        aperture = task5["apertures"][name]
-        observed = float(aperture["luminosity_erg_s"])
-        q = empirical_rate(observed, cabot_h)
-        q_task6 = empirical_rate(observed, task6_h)
+    rows, estimates = [], {}
+    for name, (energy_flux, h_sigma) in energy_fluxes.items():
+        q = empirical_rate(wegmann_lx, energy_flux)
+        q_range = rate_range(q, lx_sigma, c_sigma, h_sigma)
         deficit, fraction = missing(q, xmm_sum)
-        row = {
-            "kind": "aperture",
-            "name": name,
-            "method": "Wegmann Eq. 30 approximate Hyakutake-scale",
-            "radius_arcsec": float(aperture["radius_arcsec"]),
-            "radius_km": float(aperture["radius_km"]),
-            "measured_luminosity_erg_s": observed,
+        deficit_range, fraction_range = missing(q_range, xmm_sum)
+        estimates[name] = {
+            "energy_flux_erg_cm-2_s-1": energy_flux,
+            "energy_flux_log10_sigma": h_sigma,
             "inferred_production_rate_s-1": q,
-            "task06_prior_inferred_rate_s-1": q_task6,
-            "xmm_parent_rate_s-1": xmm_sum,
+            "inferred_production_rate_range_s-1": q_range.tolist(),
             "missing_rate_s-1": deficit,
+            "missing_rate_range_s-1": deficit_range.tolist(),
             "missing_fraction": fraction,
+            "missing_fraction_range": fraction_range.tolist(),
         }
-        rows.append(row)
-        apertures[name] = row
+        rows.append(
+            {
+                "kind": "wegmann",
+                "name": name,
+                "method": "Wegmann Eq. 30",
+                "radius_arcsec": wegmann_arcsec,
+                "radius_km": WEGMANN_APERTURE_KM,
+                "measured_luminosity_erg_s": wegmann_lx,
+                "inferred_production_rate_s-1": q,
+                "xmm_parent_rate_s-1": xmm_sum,
+                "missing_rate_s-1": deficit,
+                "missing_fraction": fraction,
+            }
+        )
 
     observed = float(task3["regions"]["inner"]["luminosity_erg_s"])
     q = invert_luminosity(observed, r_au)
@@ -147,7 +218,7 @@ def calculate(task5, task3, task6):
         / luminosity(xmm_sum, r_au),
     }
     rows.append(row)
-    apertures[SCIENCE_NAME] = row
+    apertures = {SCIENCE_NAME: row}
     slow_q = invert_luminosity(observed, r_au, END_MEMBER_SPEED_KM_S)
     slow_missing, slow_fraction = missing(slow_q, xmm_sum)
     speed_check = {
@@ -163,12 +234,14 @@ def calculate(task5, task3, task6):
     for name, (enthalpy, gamma, temperature) in ICE_PROPERTIES.items():
         energy = molecular_energy_kj(enthalpy, gamma, temperature)
         predicted_q = production_rate(END_MEMBER_RADIUS_KM, r_au, energy)
-        predicted_lx = luminosity(predicted_q, r_au, END_MEMBER_SPEED_KM_S)
+        predicted_lx = luminosity(
+            predicted_q, r_au, END_MEMBER_SPEED_KM_S, energy_flux=measured_h
+        )
         comparison = {
             "b8_production_rate_s-1": predicted_q,
             "b12_luminosity_erg_s": predicted_lx,
-            "observed_over_prediction": observed / predicted_lx,
-            "prediction_over_observed": predicted_lx / observed,
+            "observed_over_prediction": wegmann_lx / predicted_lx,
+            "prediction_over_observed": predicted_lx / wegmann_lx,
         }
         if name in xmm_rates:
             comparison["b8_over_xmm_measured_rate"] = predicted_q / xmm_rates[name]
@@ -178,9 +251,9 @@ def calculate(task5, task3, task6):
                 "kind": "end_member",
                 "name": name,
                 "method": "Cabot B2-B9/B11-B12; R=1.3 km; v=0.37 km s-1",
-                "radius_arcsec": SCIENCE_APERTURE,
-                "radius_km": radius_km,
-                "measured_luminosity_erg_s": observed,
+                "radius_arcsec": wegmann_arcsec,
+                "radius_km": WEGMANN_APERTURE_KM,
+                "measured_luminosity_erg_s": wegmann_lx,
                 "b8_production_rate_s-1": predicted_q,
                 "predicted_luminosity_erg_s": predicted_lx,
                 **{
@@ -227,14 +300,26 @@ def calculate(task5, task3, task6):
             "task06_contemporaneous": bool(task6_prior["contemporaneous"]),
             "task06_energy_eV": mean_energy,
         },
-        "empirical_scaling": {
+        "wegmann": {
+            "aperture_km": WEGMANN_APERTURE_KM,
+            "aperture_arcsec": wegmann_arcsec,
+            "luminosity_erg_s": wegmann_lx,
+            "luminosity_log10_sigma": lx_sigma,
             "coefficient_s2_cm2": WEGMANN_C_S2_CM2,
-            "aperture_scope": list(MATCHED_NAMES),
+            "coefficient_log10_sigma": c_sigma,
+            "calibration_points": len(ratios),
+            "measured_inputs": measured,
+            "estimates": estimates,
         },
         "end_member_assumptions": {
             "nucleus_radius_km": END_MEMBER_RADIUS_KM,
             "outflow_speed_km_s": END_MEMBER_SPEED_KM_S,
-            "comparison_scope": "total B12 model versus 370-arcsec measurement",
+            "energy_flux_erg_cm-2_s-1": measured_h,
+            "aperture_km": WEGMANN_APERTURE_KM,
+            "comparison_scope": "total B12 model versus aperture measurement",
+            "luminosity_ratio_log10_sigma": math.hypot(
+                lx_sigma, c_sigma, measured_sigma
+            ),
         },
         "apertures": {
             name: {
@@ -244,13 +329,6 @@ def calculate(task5, task3, task6):
         },
         "cabot_370_slow_speed_check": speed_check,
         "end_members": end_members,
-        "n2_alternative": {
-            "aperture": N2_APERTURE,
-            "missing_rate_s-1": apertures[N2_APERTURE]["missing_rate_s-1"],
-            "xmm_CO_rate_s-1": xmm_rates["CO"],
-            "Q_N2_over_Q_CO": apertures[N2_APERTURE]["missing_rate_s-1"]
-            / xmm_rates["CO"],
-        },
         "h2_thin_check": {
             "radius_arcmin": THIN_RADIUS_ARCMIN,
             "radius_km": radius_km,

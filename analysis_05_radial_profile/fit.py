@@ -3,8 +3,10 @@ import math
 import numpy as np
 from scipy.optimize import brentq, minimize
 
-# Half a 4-arcsec pixel regularizes the unresolved center.
-CORE_RADIUS_ARCMIN = 1 / 30
+# Quadrature over one eighth of a square pixel centered on the nucleus.
+PIXEL_ANGLE, PIXEL_WEIGHT = np.polynomial.legendre.leggauss(12)
+PIXEL_ANGLE = (PIXEL_ANGLE + 1) * math.pi / 8
+PIXEL_WEIGHT = PIXEL_WEIGHT * math.pi / 8
 
 
 def deviance(counts, model):
@@ -20,13 +22,25 @@ def radial_sum(sample, shape):
     return np.bincount(sample["ring"], sample["weight"] * shape, minlength=size)
 
 
-def power_shape(radius, alpha):
-    return np.maximum(radius, CORE_RADIUS_ARCMIN) ** -alpha
-
-
 def broken_shape(radius, alpha_in, alpha_out, radius_break):
-    ratio = np.maximum(radius, CORE_RADIUS_ARCMIN) / radius_break
+    ratio = np.asarray(radius) / radius_break
     return np.where(radius <= radius_break, ratio**-alpha_in, ratio**-alpha_out)
+
+
+def sample_shape(sample, alpha_in, alpha_out, radius_break):
+    radius = sample["radius"]
+    positive = radius > 0
+    shape = np.empty_like(radius, dtype=float)
+    shape[positive] = broken_shape(radius[positive], alpha_in, alpha_out, radius_break)
+    if np.any(~positive):
+        half_width = math.sqrt(sample["pixel_area_arcmin2"]) / 2
+        # The singular point has finite pixel-integrated flux for alpha_in < 2.
+        integrals = [
+            integrated_broken(1, alpha_in, alpha_out, radius_break, half_width / c)
+            for c in np.cos(PIXEL_ANGLE)
+        ]
+        shape[~positive] = np.dot(PIXEL_WEIGHT, integrals) / (math.pi * half_width**2)
+    return shape
 
 
 def best(objective, starts, bounds):
@@ -73,54 +87,29 @@ def profile_upper(objective, point, bounds, index):
     return math.exp(crossing) - math.exp(lower)
 
 
-def fit_epic(sample, broken=False, background_interval=False):
+def fit_epic(sample, background_interval=False):
     rate = (sample["counts"] - sample["fixed"]) / sample["area"]
     positive = rate[np.isfinite(rate) & (rate > 0)]
     level = float(np.median(positive))
     sky = max(float(np.percentile(positive, 10)), 1e-8)
     amplitude = max(level - sky, 1e-5)
-    if broken:
-        bounds = [(-30, 5), (-1, 1.9), (0, 3), (math.log(0.1), math.log(2)), (-30, 5)]
+    bounds = [(-30, 5), (-1, 1.9), (0, 3), (math.log(0.1), math.log(2)), (-30, 5)]
 
-        def expected(theta):
-            shape = broken_shape(
-                sample["radius"], theta[1], theta[2], math.exp(theta[3])
-            )
-            return (
-                math.exp(theta[0]) * radial_sum(sample, shape)
-                + math.exp(theta[4]) * sample["area"]
-                + sample["fixed"]
-            )
+    def expected(theta):
+        shape = sample_shape(sample, theta[1], theta[2], math.exp(theta[3]))
+        return (
+            math.exp(theta[0]) * radial_sum(sample, shape)
+            + math.exp(theta[4]) * sample["area"]
+            + sample["fixed"]
+        )
 
-        starts = [
-            np.array([math.log(amplitude), 0.3, 1, math.log(radius), math.log(sky)])
-            for radius in (0.3, 0.6, 1)
-        ]
-        background_index = 4
-    else:
-        bounds = [(-30, 5), (0, 3), (-30, 5)]
-
-        def expected(theta):
-            shape = power_shape(sample["radius"], theta[1])
-            return (
-                math.exp(theta[0]) * radial_sum(sample, shape)
-                + math.exp(theta[2]) * sample["area"]
-                + sample["fixed"]
-            )
-
-        starts = [
-            np.array([math.log(amplitude), slope, math.log(sky)])
-            for slope in (0.8, 1, 1.2)
-        ]
-        background_index = 2
-
+    starts = [
+        np.array([math.log(amplitude), 0.3, 1, math.log(radius), math.log(sky)])
+        for radius in (0.3, 0.6, 1)
+    ]
     objective = lambda theta: deviance(sample["counts"], expected(theta))
     fit = best(objective, starts, bounds)
-    error = (
-        profile_upper(objective, fit.x, bounds, background_index)
-        if background_interval
-        else None
-    )
+    error = profile_upper(objective, fit.x, bounds, 4) if background_interval else None
     return {"theta": fit.x, "stat": float(fit.fun), "background_error": error}
 
 
@@ -143,12 +132,12 @@ def fit_pps(sample):
     level = float(np.median(rate[rate > 0]))
 
     def components(theta):
-        shape = power_shape(sample["radius"], theta[1])
+        shape = sample_shape(sample, theta[1], theta[2], math.exp(theta[3]))
         vignetted = (
             math.exp(theta[0]) * radial_sum(sample, shape)
-            + math.exp(theta[2]) * sample["area"]
+            + math.exp(theta[4]) * sample["area"]
         )
-        ratio = math.exp(theta[3])
+        ratio = math.exp(theta[5])
         particle = hard_expectation(sample["soft"], sample["hard"], vignetted, ratio)
         return vignetted, particle, ratio
 
@@ -160,11 +149,26 @@ def fit_pps(sample):
 
     starts = [
         np.array(
-            [math.log(level), slope, math.log(max(level / 20, 1e-8)), math.log(0.1)]
+            [
+                math.log(level),
+                0.3,
+                1,
+                math.log(radius),
+                math.log(max(level / 20, 1e-8)),
+                math.log(0.3),
+            ]
         )
-        for slope in (0.8, 1, 1.2)
+        for radius in (0.3, 0.6, 1)
     ]
-    fit = best(objective, starts, [(-30, 5), (0, 3), (-30, 5), (-20, 5)])
+    bounds = [
+        (-30, 5),
+        (-1, 1.9),
+        (0, 3),
+        (math.log(0.1), math.log(2)),
+        (-30, 5),
+        (-20, 5),
+    ]
+    fit = best(objective, starts, bounds)
     _, particle, ratio = components(fit.x)
     return {
         "theta": fit.x,
@@ -175,23 +179,18 @@ def fit_pps(sample):
 
 
 def integrated_broken(amplitude, alpha_in, alpha_out, radius_break, radius):
+    if alpha_in >= 2:
+        raise ValueError("the inner slope must be below 2 for finite aperture flux")
+
     def integral(lo, hi, alpha):
         if abs(alpha - 2) < 1e-8:
             return math.log(hi / lo)
         return (hi ** (2 - alpha) - lo ** (2 - alpha)) / (2 - alpha)
 
-    if radius <= CORE_RADIUS_ARCMIN:
-        return (
-            math.pi
-            * radius**2
-            * amplitude
-            * (CORE_RADIUS_ARCMIN / radius_break) ** -alpha_in
-        )
     inner = (
-        0.5 * CORE_RADIUS_ARCMIN**2 * (CORE_RADIUS_ARCMIN / radius_break) ** -alpha_in
-    )
-    inner += radius_break**alpha_in * integral(
-        CORE_RADIUS_ARCMIN, min(radius, radius_break), alpha_in
+        radius_break**alpha_in
+        * min(radius, radius_break) ** (2 - alpha_in)
+        / (2 - alpha_in)
     )
     outer = (
         0

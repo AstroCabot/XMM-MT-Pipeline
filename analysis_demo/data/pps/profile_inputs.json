@@ -1,0 +1,142 @@
+{
+  "bands": [
+    "200-500",
+    "500-1000",
+    "1000-2000",
+    "200-350",
+    "200-300",
+    "350-1100"
+  ],
+  "ecfs": {
+    "200-500": 862191381826.5261,
+    "500-1000": 753861602466.4747,
+    "1000-2000": 540615893031.54156,
+    "200-350": 1136466674373.9846,
+    "200-300": 1394477419156.289,
+    "350-1100": 756233882941.8618
+  },
+  "metadata": {
+    "epoch_utc": "2025-12-03T21:25:46.398",
+    "distance_au": 1.8815323353,
+    "good_time_s": 31445.356277108192,
+    "fit_range_arcmin": [
+      0,
+      12
+    ],
+    "selection": "PPS CCD GTIs; RAWY>12; FLAG==0; PI in (low, high]; no field-source masks",
+    "calibration": {
+      "method": "direct standard-response ECFs in every band",
+      "photon_index": 1.7,
+      "nh_cm-2": 3e+20,
+      "response_conversion": {
+        "method": "predicted band count rate / model band energy flux, directly from standard responses",
+        "model": "phabs*powerlaw",
+        "photon_index": 1.7,
+        "nh_cm-2": 3e+20,
+        "abundances": "angr",
+        "cross_sections": "bcmc",
+        "flux_convention": "absorbed; no deabsorption correction",
+        "response_url": "https://heasarc.gsfc.nasa.gov/FTP/xmm/data/responses/xmm_ao26_calfiles.tar.gz",
+        "singles_rmf_url": "https://heasarc.gsfc.nasa.gov/FTP/xmm/data/CCF/extras/responses/PN/epn_e4_ff20_sY9_v22.0.rmf",
+        "pattern_fraction_url": "https://heasarc.gsfc.nasa.gov/FTP/xmm/data/CCF/EPN_QUANTUMEF_0018.CCF",
+        "singles_response": "epoch e4, full frame, Y9; standard ARF multiplied by CCF FRAC_S/FRAC_SD at the same position",
+        "response_files": [
+          {
+            "name": "pn-thin-5.rmf",
+            "sha256": "7a59f530a07f8d5c9c8345468924ebe535dc20ae474f25bce76a57094122fe0e"
+          },
+          {
+            "name": "pn-thin-5.arf",
+            "sha256": "3143ad79866badcca7fb22e370b402e93135e48b6fe444a774b27bde6c80b30b"
+          },
+          {
+            "name": "epn_e4_ff20_sY9_v22.0.rmf",
+            "sha256": "f47615ad5244f32bd461d506730db09e8fd4878b04bbab1b4cc395f2a655844f"
+          },
+          {
+            "name": "EPN_QUANTUMEF_0018.CCF",
+            "sha256": "141befe886a07966544ef8256c5b3da26a4810a0f496f8fd9e1d27aab770bae8"
+          }
+        ],
+        "xspec_version": [
+          "2.1.5",
+          "12.15.1"
+        ],
+        "approximation": "standard point-source responses, including their aperture losses, used directly for preliminary luminosities",
+        "bands": {
+          "200-500": {
+            "pattern_max": 0,
+            "model_rate_ct_s": 431.1893531150217,
+            "model_energy_flux_erg_cm2_s": 5.001086327278755e-10,
+            "ecf_counts_cm2_per_erg": 862191381826.5261
+          },
+          "500-1000": {
+            "pattern_max": 4,
+            "model_rate_ct_s": 642.0165874705206,
+            "model_energy_flux_erg_cm2_s": 8.516372041897066e-10,
+            "ecf_counts_cm2_per_erg": 753861602466.4747
+          },
+          "1000-2000": {
+            "pattern_max": 4,
+            "model_rate_ct_s": 644.4266395322505,
+            "model_energy_flux_erg_cm2_s": 1.192023112599563e-09,
+            "ecf_counts_cm2_per_erg": 540615893031.54156
+          },
+          "200-350": {
+            "pattern_max": 0,
+            "model_rate_ct_s": 217.72537602097077,
+            "model_energy_flux_erg_cm2_s": 1.9158095959206496e-10,
+            "ecf_counts_cm2_per_erg": 1136466674373.9846
+          },
+          "200-300": {
+            "pattern_max": 0,
+            "model_rate_ct_s": 145.94096637482997,
+            "model_energy_flux_erg_cm2_s": 1.0465638551761542e-10,
+            "ecf_counts_cm2_per_erg": 1394477419156.289
+          },
+          "350-1100": {
+            "pattern_max": 4,
+            "model_rate_ct_s": 986.7366673558793,
+            "model_energy_flux_erg_cm2_s": 1.3048035662159536e-09,
+            "ecf_counts_cm2_per_erg": 756233882941.8618
+          }
+        }
+      },
+      "exposure_approximation": "reuse native PPS maps; sub-bands below 500 eV use EXPMAP1000"
+    },
+    "inputs": [
+      {
+        "path": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/MT_PPS/P0963720201PNS003PIEVLI0000.FTZ",
+        "sha256": "e8ad1a781bcc089e0b9a764f34301ed6cca2ba74ca56d285f8d3ab85488cf82a"
+      },
+      {
+        "path": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/MT_PPS/P0963720201PNS003IMAGE_2000.FTZ",
+        "sha256": "fbe5d1a50ec1408d7ec8f4f6f849ee627052b567aadfe198d45adb630f44fc4c"
+      },
+      {
+        "path": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/MT_PPS/P0963720201PNS003EXPMAP1000.FTZ",
+        "sha256": "abb9346b996e77d798cfb508a2792a10cff6ceff216162679301d272d8127f44"
+      },
+      {
+        "path": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/MT_PPS/P0963720201PNS003EXPMAP2000.FTZ",
+        "sha256": "685b693565d8d16a8ac4ed78c4547db41c7bbdace2ad9eda5ff737198ea16425"
+      },
+      {
+        "path": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Data/xmm_3iatlas_updated/MT_PPS/P0963720201PNS003EXPMAP3000.FTZ",
+        "sha256": "0e782d486d70ca7193e1384fde739df0605b179eeefb74efa236e4b93562ad12"
+      },
+      {
+        "path": "/mnt/c/Users/cabot/OneDrive/Documents/Research/Cambridge/X3I/analysis_repro/analysis_02_pps_luminosity/ecfs.json",
+        "sha256": "469a89df8bb75281937c50841383595ca042747f1b4ecb7368b1dae9dceea46c"
+      }
+    ]
+  },
+  "ecf_sources": {
+    "200-500": "fixed spectrum folded through standard response; ecfs.json",
+    "500-1000": "fixed spectrum folded through standard response; ecfs.json",
+    "1000-2000": "fixed spectrum folded through standard response; ecfs.json",
+    "200-350": "fixed spectrum folded through standard response; ecfs.json",
+    "200-300": "fixed spectrum folded through standard response; ecfs.json",
+    "350-1100": "fixed spectrum folded through standard response; ecfs.json"
+  }
+}

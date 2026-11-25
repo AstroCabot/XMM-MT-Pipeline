@@ -9,7 +9,7 @@
   "pps_background_annulus_arcsec": [600, 720],
   "spectrum_outer_annulus_arcsec": [400, 600],
   "lightcurve_background_annulus_arcsec": [480, 720],
-  "profile_fit_arcmin": [0.75, 12],
+  "profile_fit_arcmin": [0, 12],
   "profile_bin_width_arcmin": 0.25,
   "chemistry_annulus_edges_arcsec": [0, 15, 30, 45, 75, 135, 240, 360, 480, 600, 720],
   "display_exposure_floor_fraction": 0.10,
@@ -30,7 +30,7 @@
         "beta": {"mean": 1.504, "sigma": 0.826}
       },
       "CO": {
-        "reference_rate_s-1": {"median": 7.60e27, "sigma_ln": 0.1961487814},
+        "reference_rate_s-1": {"median": 7.60e27, "sigma_ln": 0.1961089845},
         "beta": {"mean": 1.033, "sigma": 0.604}
       }
     }

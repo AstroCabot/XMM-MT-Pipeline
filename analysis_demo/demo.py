@@ -11,7 +11,7 @@ DEMO = Path(__file__).resolve().parent
 REPRO = DEMO.parent
 OUT = DEMO / "outputs"
 STAGES = (
-    ("02", "PPS luminosity geometry"),
+    ("02", "PPS broken profiles and luminosities"),
     ("03", "PN spectral fit (PyXspec + ACX2)"),
     ("04", "comet-frame morphology"),
     ("05", "radial profile"),
@@ -55,9 +55,12 @@ def summarize():
     summary = {
         "pps_luminosity": {
             "epoch_utc": results["02"]["epoch_utc"],
-            "full_aperture_luminosity_erg_s": results["02"]["flux_luminosity"][
-                "full_aperture"
-            ]["luminosity_erg_s"],
+            "luminosity_200_1000_eV_370_arcsec_erg_s": results["02"]["summed_bands"][
+                "200-1000"
+            ]["370_arcsec"]["luminosity_erg_s"],
+            "luminosity_200_350_eV_110000_km_erg_s": results["02"]["bands"][
+                "200-350"
+            ]["apertures"]["110000_km"]["luminosity_erg_s"],
         },
         "spectrum_pn_only": {
             "chi2": r3["fit"]["chi2"],
@@ -99,7 +102,6 @@ def summarize():
             "cabot_370_missing_fraction": r7["cabot_370_slow_speed_check"][
                 "missing_fraction"
             ],
-            "n2_alternative_Q_N2_over_Q_CO": r7["n2_alternative"]["Q_N2_over_Q_CO"],
         },
         "chemistry_posterior": {
             "mean_acceptance_fraction": r8["mean_acceptance_fraction"],
@@ -137,9 +139,7 @@ def main():
     for number, label in STAGES:
         script = DEMO / "stages" / f"stage{number}.py"
         command = (
-            headas_command(script)
-            if number == "03"
-            else [sys.executable, str(script)]
+            headas_command(script) if number == "03" else [sys.executable, str(script)]
         )
         print(f"[{time.time() - start:7.1f}s] stage {number}: {label}", flush=True)
         tick = time.time()

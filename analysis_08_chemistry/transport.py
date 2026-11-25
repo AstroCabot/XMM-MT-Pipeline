@@ -1,11 +1,13 @@
 import math
 
 import numpy as np
+from scipy.interpolate import PchipInterpolator
 
 DAY_S = 86400.0
 GAUSS_K = 0.01720209894846
 EV_ERG = 1.602176634e-12
 ARCMIN2_SR = (math.pi / 10800) ** 2
+QUADRATURE_NODES, QUADRATURE_WEIGHTS = np.polynomial.legendre.leggauss(4)
 
 
 class Orbit:
@@ -73,7 +75,7 @@ class Transport:
         outer_km,
         source_radius_arcmin,
         km_per_arcmin,
-        granddaughter_stride=4,
+        granddaughter_stride=8,
         granddaughter_radial_stride=4,
     ):
         self.orbit, self.network = orbit, network
@@ -133,56 +135,72 @@ class Transport:
         coarse = self.edges[:: self.stride]
         if coarse[-1] != self.edges[-1]:
             coarse = np.r_[coarse, self.edges[-1]]
-        lo1, hi1 = coarse[:-1][None, :, None], coarse[1:][None, :, None]
-        lo2, hi2 = coarse[:-1][None, None, :], coarse[1:][None, None, :]
         index = np.unique(
             np.r_[
                 np.arange(0, len(self.radius), self.radial_stride), len(self.radius) - 1
             ]
         )
-        final_radius = self.radius[index, None, None]
-        b1 = 0.5 * (lo1 + hi1)
-        upper2 = np.minimum(hi2, final_radius)
-        lower2 = np.maximum(lo2, b1)
-        valid = upper2 > lower2
-        lower2, upper2 = np.where(valid, lower2, b1), np.where(valid, upper2, b1)
-        b2 = 0.5 * (lower2 + upper2)
-        final_age = np.maximum(final_radius - b2, 0) / velocity[2]
-        middle_age = (b2 - b1) / velocity[1]
-        parent_start = final_age + middle_age
-        emission_age = parent_start + (b1 - self.edges[0]) / velocity[0]
-        parent = (
-            (hi1 - lo1)
-            * rate[0]
-            / velocity[0]
-            * self.orbit.inverse_r2(parent_start)
-            * np.exp(
-                -rate[0]
-                * (
-                    self.orbit.exposure(emission_age)
-                    - self.orbit.exposure(parent_start)
+        values = []
+        for start in range(0, len(index), 8):
+            final_radius = self.radius[index[start : start + 8], None, None]
+            stop = min(np.searchsorted(coarse, final_radius.max()), len(coarse) - 1)
+            lo = np.repeat(coarse[:stop], len(QUADRATURE_NODES))
+            hi = np.repeat(coarse[1 : stop + 1], len(QUADRATURE_NODES))
+            node = np.tile(QUADRATURE_NODES, stop)
+            weight = np.tile(QUADRATURE_WEIGHTS, stop)
+            lo1, hi1 = lo[None, :, None], hi[None, :, None]
+            lo2, hi2 = lo[None, None, :], hi[None, None, :]
+            upper1 = np.maximum(lo1, np.minimum(hi1, final_radius))
+            width1 = upper1 - lo1
+            b1 = 0.5 * (lo1 + upper1 + width1 * node[None, :, None])
+            lower2 = np.maximum(lo2, b1)
+            upper2 = np.maximum(lower2, np.minimum(hi2, final_radius))
+            width2 = upper2 - lower2
+            b2 = 0.5 * (lower2 + upper2 + width2 * node[None, None, :])
+            final_age = np.maximum(final_radius - b2, 0) / velocity[2]
+            middle_age = (b2 - b1) / velocity[1]
+            parent_start = final_age + middle_age
+            emission_age = parent_start + (b1 - self.edges[0]) / velocity[0]
+            parent = (
+                0.5
+                * width1
+                * weight[None, :, None]
+                * rate[0]
+                / velocity[0]
+                * self.orbit.inverse_r2(parent_start)
+                * np.exp(
+                    -rate[0]
+                    * (
+                        self.orbit.exposure(emission_age)
+                        - self.orbit.exposure(parent_start)
+                    )
                 )
             )
-        )
-        daughter = (
-            (upper2 - lower2)
-            * rate[1]
-            / velocity[1]
-            * self.orbit.inverse_r2(final_age)
-            * np.exp(
-                -rate[1]
-                * (self.orbit.exposure(parent_start) - self.orbit.exposure(final_age))
+            daughter = (
+                0.5
+                * width2
+                * weight[None, None, :]
+                * rate[1]
+                / velocity[1]
+                * self.orbit.inverse_r2(final_age)
+                * np.exp(
+                    -rate[1]
+                    * (
+                        self.orbit.exposure(parent_start)
+                        - self.orbit.exposure(final_age)
+                    )
+                )
             )
-        )
-        survival = np.exp(-rate[2] * self.orbit.exposure(final_age))
-        terms = parent * daughter * survival * self.orbit.activity(beta, emission_age)
-        values = np.where(valid, terms, 0).sum(axis=(1, 2))
+            survival = np.exp(-rate[2] * self.orbit.exposure(final_age))
+            terms = (
+                parent * daughter * survival * self.orbit.activity(beta, emission_age)
+            )
+            values.extend(terms.sum(axis=(1, 2)))
         return np.exp(
-            np.interp(
-                np.log(self.radius),
+            PchipInterpolator(
                 np.log(self.radius[index]),
                 np.log(np.maximum(values, np.finfo(float).tiny)),
-            )
+            )(np.log(self.radius))
         )
 
     def source_profile(
@@ -190,6 +208,8 @@ class Transport:
     ):
         opacity = np.zeros_like(self.radius)
         for primary, q_s in primaries.items():
+            if q_s == 0:
+                continue
             for chain in chains[primary]:
                 density = q_s * self.density(chain, beta[primary], speed)
                 opacity += density * self.network[chain[0][-1][0]]["sigma_cm2"]

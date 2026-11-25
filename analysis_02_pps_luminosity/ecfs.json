@@ -1,0 +1,74 @@
+{
+  "method": "predicted band count rate / model band energy flux, directly from standard responses",
+  "model": "phabs*powerlaw",
+  "photon_index": 1.7,
+  "nh_cm-2": 3e+20,
+  "abundances": "angr",
+  "cross_sections": "bcmc",
+  "flux_convention": "absorbed; no deabsorption correction",
+  "response_url": "https://heasarc.gsfc.nasa.gov/FTP/xmm/data/responses/xmm_ao26_calfiles.tar.gz",
+  "singles_rmf_url": "https://heasarc.gsfc.nasa.gov/FTP/xmm/data/CCF/extras/responses/PN/epn_e4_ff20_sY9_v22.0.rmf",
+  "pattern_fraction_url": "https://heasarc.gsfc.nasa.gov/FTP/xmm/data/CCF/EPN_QUANTUMEF_0018.CCF",
+  "singles_response": "epoch e4, full frame, Y9; standard ARF multiplied by CCF FRAC_S/FRAC_SD at the same position",
+  "response_files": [
+    {
+      "name": "pn-thin-5.rmf",
+      "sha256": "7a59f530a07f8d5c9c8345468924ebe535dc20ae474f25bce76a57094122fe0e"
+    },
+    {
+      "name": "pn-thin-5.arf",
+      "sha256": "3143ad79866badcca7fb22e370b402e93135e48b6fe444a774b27bde6c80b30b"
+    },
+    {
+      "name": "epn_e4_ff20_sY9_v22.0.rmf",
+      "sha256": "f47615ad5244f32bd461d506730db09e8fd4878b04bbab1b4cc395f2a655844f"
+    },
+    {
+      "name": "EPN_QUANTUMEF_0018.CCF",
+      "sha256": "141befe886a07966544ef8256c5b3da26a4810a0f496f8fd9e1d27aab770bae8"
+    }
+  ],
+  "xspec_version": [
+    "2.1.5",
+    "12.15.1"
+  ],
+  "approximation": "standard point-source responses, including their aperture losses, used directly for preliminary luminosities",
+  "bands": {
+    "200-500": {
+      "pattern_max": 0,
+      "model_rate_ct_s": 431.1893531150217,
+      "model_energy_flux_erg_cm2_s": 5.001086327278755e-10,
+      "ecf_counts_cm2_per_erg": 862191381826.5261
+    },
+    "500-1000": {
+      "pattern_max": 4,
+      "model_rate_ct_s": 642.0165874705206,
+      "model_energy_flux_erg_cm2_s": 8.516372041897066e-10,
+      "ecf_counts_cm2_per_erg": 753861602466.4747
+    },
+    "1000-2000": {
+      "pattern_max": 4,
+      "model_rate_ct_s": 644.4266395322505,
+      "model_energy_flux_erg_cm2_s": 1.192023112599563e-09,
+      "ecf_counts_cm2_per_erg": 540615893031.54156
+    },
+    "200-350": {
+      "pattern_max": 0,
+      "model_rate_ct_s": 217.72537602097077,
+      "model_energy_flux_erg_cm2_s": 1.9158095959206496e-10,
+      "ecf_counts_cm2_per_erg": 1136466674373.9846
+    },
+    "200-300": {
+      "pattern_max": 0,
+      "model_rate_ct_s": 145.94096637482997,
+      "model_energy_flux_erg_cm2_s": 1.0465638551761542e-10,
+      "ecf_counts_cm2_per_erg": 1394477419156.289
+    },
+    "350-1100": {
+      "pattern_max": 4,
+      "model_rate_ct_s": 986.7366673558793,
+      "model_energy_flux_erg_cm2_s": 1.3048035662159536e-09,
+      "ecf_counts_cm2_per_erg": 756233882941.8618
+    }
+  }
+}

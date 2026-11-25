@@ -167,7 +167,7 @@ def corner_product():
         log_probability = np.asarray(stored["log_probability"], float)
         names = tuple(stored["coordinate_names"].astype(str))
     if (
-        names != inference.COORDS
+        names != inference.coordinates(CONFIG)
         or theta.ndim != 2
         or theta.shape[1] != len(names)
         or log_probability.shape != (len(theta),)
@@ -175,7 +175,12 @@ def corner_product():
         raise RuntimeError("chain.npz does not match the current model")
     orbit = make_orbit()
     physical = np.array([inference.unpack(row, CONFIG, orbit)[-1] for row in theta])
-    diagnostic.draw(physical, log_probability, OUTPUT / "corner.png")
+    diagnostic.draw(
+        physical,
+        log_probability,
+        OUTPUT / "corner.png",
+        names=inference.physical_names(CONFIG),
+    )
 
 
 def profile_exposure(edges):
@@ -412,24 +417,33 @@ def load_psf(path, inputs, dependencies):
 
 def select_water_prior(name):
     global OUTPUT
+    key = "beta_steep" if name == "frincke" else "beta"
+    beta = SHARED["spherex"]["parent_priors"]["H2O"][key]
+    CONFIG["priors"]["beta_H2O"] = [beta["mean"], beta["sigma"]]
     if name == "frincke":
-        beta = SHARED["spherex"]["parent_priors"]["H2O"]["beta_steep"]
-        CONFIG["priors"]["beta_H2O"] = [beta["mean"], beta["sigma"]]
         OUTPUT = products.OUTPUT = OUTPUT / "water_frincke"
 
 
 def main():
+    global OUTPUT
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "stage", choices=("all", "psf", "fit", "corner"), nargs="?", default="all"
     )
     parser.add_argument("--water-prior", choices=("tan", "frincke"), default="tan")
+    parser.add_argument("--no-direct-h2", action="store_true")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--retained-steps", type=int)
     args = parser.parse_args()
-    if args.water_prior == "frincke" and args.stage not in ("fit", "corner"):
-        parser.error("the Frincke water prior shares the PSF; use fit or corner")
+    if (args.water_prior == "frincke" or args.no_direct_h2) and args.stage not in (
+        "fit",
+        "corner",
+    ):
+        parser.error("alternative models share the PSF; use fit or corner")
     psf = OUTPUT / "psf.npz"
+    CONFIG["direct_h2"] = not args.no_direct_h2
+    if args.no_direct_h2:
+        OUTPUT = products.OUTPUT = OUTPUT / "no_direct_h2"
     select_water_prior(args.water_prior)
     checkpoint = OUTPUT / "chain.pkl"
     if args.stage in ("all", "fit") and checkpoint.exists() and not args.resume:

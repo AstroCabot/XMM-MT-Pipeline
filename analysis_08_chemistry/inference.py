@@ -7,6 +7,7 @@ import numpy as np
 from scipy.special import ndtr, ndtri
 
 CHECKPOINT_STEPS = 500
+_WORKER_MODEL = None
 
 COORDS = (
     "ln_Qref_H2O",
@@ -55,6 +56,24 @@ PHYSICAL_NAMES = (
 )
 
 
+def coordinates(config):
+    if config.get("direct_h2", True):
+        return COORDS
+    return tuple(
+        name for name in COORDS if name not in ("beta_H2", "log10_H2_ratio", "v_H2")
+    )
+
+
+def physical_names(config):
+    if config.get("direct_h2", True):
+        return PHYSICAL_NAMES
+    return tuple(
+        name
+        for name in PHYSICAL_NAMES
+        if name not in ("beta_H2", "log10_H2_ratio", "v_H2_km_s")
+    )
+
+
 def normal_logpdf(value, mean, sigma):
     return -0.5 * ((value - mean) / sigma) ** 2 - math.log(
         sigma * math.sqrt(2 * math.pi)
@@ -78,16 +97,17 @@ def halfnormal_logpdf(value, sigma):
 
 
 def unpack(theta, config, orbit):
-    value = dict(zip(COORDS, np.asarray(theta, float), strict=True))
-    beta = {name: value[f"beta_{name}"] for name in ("H2O", "CO2", "CO", "H2")}
+    value = dict(zip(coordinates(config), np.asarray(theta, float), strict=True))
+    parents = ("H2O", "CO2", "CO") + (("H2",) if config.get("direct_h2", True) else ())
+    beta = {name: value[f"beta_{name}"] for name in parents}
     reference = config["production_reference_r_au"]
     q = {
         name: math.exp(value[f"ln_Qref_{name}"])
         * (orbit.current_r_au / reference) ** (-beta[name])
         for name in ("H2O", "CO2", "CO")
     }
-    q["H2"] = 10 ** value["log10_H2_ratio"] * sum(q.values())
-    speed = {name: value[f"v_{name}"] for name in ("H2O", "CO2", "CO", "H2")}
+    q["H2"] = 10 ** value["log10_H2_ratio"] * sum(q.values()) if "H2" in beta else 0.0
+    speed = {name: value[f"v_{name}"] for name in parents}
     speed.update(
         OH=value["v_OH"],
         O_H2O=value["v_O_H2O"],
@@ -97,8 +117,8 @@ def unpack(theta, config, orbit):
         H2_photo=config["fixed_velocity_km_s"]["photolytic_H2"],
     )
     physical = [q[name] for name in ("H2O", "CO2", "CO", "H2")]
-    physical += [beta[name] for name in ("H2O", "CO2", "CO", "H2")]
-    physical += [value[name] for name in COORDS[7:17]]
+    physical += [beta[name] for name in parents]
+    physical += [value[name] for name in COORDS[7:17] if name in value]
     physical += [math.exp(value["ln_scale"]), value["offset"], value["jitter"]]
     return value, q, beta, speed, np.asarray(physical)
 
@@ -126,6 +146,8 @@ class Posterior:
             **config,
             "fixed_velocity_km_s": config["fixed_velocity_km_s"].copy(),
         }
+        self.coords = coordinates(self.config)
+        self.physical_names = physical_names(self.config)
         self.photon_energy_ev = photon_energy_ev
         self.scale_sigma, self.offset_sigma = scale_sigma, offset_sigma
         self.heavy_lower, self.heavy_upper = heavy_lower, heavy_upper
@@ -133,7 +155,7 @@ class Posterior:
             raise ValueError("profile and PSF dimensions differ")
 
     def log_prior(self, theta):
-        v = dict(zip(COORDS, np.asarray(theta, float), strict=True))
+        v = dict(zip(self.coords, np.asarray(theta, float), strict=True))
         p = self.config["priors"]
         result = sum(
             normal_logpdf(
@@ -145,12 +167,14 @@ class Posterior:
         )
         for name in ("H2O", "CO2", "CO"):
             result += normal_logpdf(v[f"beta_{name}"], *p[f"beta_{name}"])
-        result += uniform_logpdf(v["beta_H2"], *p["beta_H2"])
-        result += uniform_logpdf(v["log10_H2_ratio"], *p["log10_H2_ratio"])
+        if "beta_H2" in v:
+            result += uniform_logpdf(v["beta_H2"], *p["beta_H2"])
+            result += uniform_logpdf(v["log10_H2_ratio"], *p["log10_H2_ratio"])
         result += uniform_logpdf(v["phi_heavy"], self.heavy_lower, self.heavy_upper)
         result += sum(
             positive_normal_logpdf(v[f"v_{name}"], *p["parent_velocity"])
             for name in ("H2O", "CO2", "CO", "H2")
+            if f"v_{name}" in v
         )
         result += uniform_logpdf(v["v_OH"], *p["OH_velocity"])
         result += uniform_logpdf(v["v_O_H2O"], *p["O_velocity"])
@@ -201,7 +225,11 @@ class Posterior:
 
 
 def draw_walkers(posterior, count, rng):
-    p, rows = posterior.config["priors"], []
+    rows = Gaussianized(posterior).physical(
+        rng.normal(size=(count, len(posterior.coords)))
+    )
+    if "log10_H2_ratio" not in posterior.coords:
+        return rows
     families = ((0.4, (-4, -1.5)), (0.2, (-1.5, -0.5)), (0.4, (-0.5, 1)))
     family = np.concatenate(
         [np.tile(bounds, (max(1, round(frac * count)), 1)) for frac, bounds in families]
@@ -210,32 +238,10 @@ def draw_walkers(posterior, count, rng):
         family = np.vstack((family, np.tile((-0.5, 1), (count - len(family), 1))))
     rng.shuffle(family)
 
-    def positive(mean, sigma):
-        return next(x for x in rng.normal(mean, sigma, 1000) if x > 0)
-
-    for lower, upper in family:
-        row = [
-            rng.normal(math.log(p[f"Qref_{x}"][0]), p[f"Qref_{x}"][1])
-            for x in ("H2O", "CO2", "CO")
-        ]
-        row += [rng.normal(*p[f"beta_{x}"]) for x in ("H2O", "CO2", "CO")]
-        row += [
-            rng.uniform(*p["beta_H2"]),
-            rng.uniform(lower, upper),
-            rng.uniform(posterior.heavy_lower, posterior.heavy_upper),
-        ]
-        row += [positive(*p["parent_velocity"]) for _ in range(4)]
-        row += [
-            rng.uniform(*p["OH_velocity"]),
-            rng.uniform(*p["O_velocity"]),
-            rng.uniform(*p["O_velocity"]),
-            rng.uniform(*p["H_velocity"]),
-            rng.normal(0, posterior.scale_sigma),
-            rng.normal(0, posterior.offset_sigma),
-            abs(rng.normal(0, p["jitter_sigma"])),
-        ]
-        rows.append(row)
-    return np.asarray(rows)
+    rows[:, posterior.coords.index("log10_H2_ratio")] = rng.uniform(
+        family[:, 0], family[:, 1]
+    )
+    return rows
 
 
 def load_checkpoint(path):
@@ -252,18 +258,33 @@ def save_checkpoint(backend, path):
     temporary.replace(path)
 
 
+def _initialize_worker(model):
+    global _WORKER_MODEL
+    _WORKER_MODEL = model
+
+
+def _worker_log_probability(theta):
+    return _WORKER_MODEL.log_probability(theta)
+
+
 def run_sampler(
     posterior, start, burn, retained, processes=1, seed=None, checkpoint=None
 ):
     import emcee
 
     method = "fork" if "fork" in mp.get_all_start_methods() else "spawn"
-    pool = mp.get_context(method).Pool(processes) if processes > 1 else None
+    pool = (
+        mp.get_context(method).Pool(
+            processes, initializer=_initialize_worker, initargs=(posterior,)
+        )
+        if processes > 1
+        else None
+    )
     try:
         sampler = emcee.EnsembleSampler(
             len(start),
-            len(COORDS),
-            posterior.log_probability,
+            start.shape[1],
+            _worker_log_probability if pool else posterior.log_probability,
             pool=pool,
             blobs_dtype=float,
             moves=emcee.moves.DEMove(),
@@ -274,7 +295,15 @@ def run_sampler(
         while sampler.iteration < burn + retained:
             steps = min(CHECKPOINT_STEPS, burn + retained - sampler.iteration)
             state = None if sampler.iteration else start
-            sampler.run_mcmc(state, steps, progress=False)
+            sampler.run_mcmc(
+                state,
+                steps,
+                progress=checkpoint is not None,
+                progress_kwargs={
+                    "mininterval": 600,
+                    "desc": f"Completed {sampler.iteration}/{burn + retained}",
+                },
+            )
             if checkpoint is not None:
                 save_checkpoint(sampler.backend, checkpoint)
     finally:
@@ -293,28 +322,37 @@ def run_sampler(
 class Gaussianized:
     def __init__(self, posterior):
         self.posterior = posterior
+        coords = posterior.coords
         p = posterior.config["priors"]
         self.normal = {
-            COORDS.index("ln_scale"): (0.0, posterior.scale_sigma),
-            COORDS.index("offset"): (0.0, posterior.offset_sigma),
+            coords.index("ln_scale"): (0.0, posterior.scale_sigma),
+            coords.index("offset"): (0.0, posterior.offset_sigma),
         }
         for name in ("H2O", "CO2", "CO"):
             median, width = p[f"Qref_{name}"]
-            self.normal[COORDS.index(f"ln_Qref_{name}")] = (math.log(median), width)
-            self.normal[COORDS.index(f"beta_{name}")] = tuple(p[f"beta_{name}"])
+            self.normal[coords.index(f"ln_Qref_{name}")] = (math.log(median), width)
+            self.normal[coords.index(f"beta_{name}")] = tuple(p[f"beta_{name}"])
         self.uniform = {
-            COORDS.index("beta_H2"): tuple(p["beta_H2"]),
-            COORDS.index("log10_H2_ratio"): tuple(p["log10_H2_ratio"]),
-            COORDS.index("phi_heavy"): (posterior.heavy_lower, posterior.heavy_upper),
-            COORDS.index("v_OH"): tuple(p["OH_velocity"]),
-            COORDS.index("v_O_H2O"): tuple(p["O_velocity"]),
-            COORDS.index("v_O_OH"): tuple(p["O_velocity"]),
-            COORDS.index("v_H"): tuple(p["H_velocity"]),
+            coords.index(name): bounds
+            for name, bounds in (
+                ("beta_H2", tuple(p["beta_H2"])),
+                ("log10_H2_ratio", tuple(p["log10_H2_ratio"])),
+                ("phi_heavy", (posterior.heavy_lower, posterior.heavy_upper)),
+                ("v_OH", tuple(p["OH_velocity"])),
+                ("v_O_H2O", tuple(p["O_velocity"])),
+                ("v_O_OH", tuple(p["O_velocity"])),
+                ("v_H", tuple(p["H_velocity"])),
+            )
+            if name in coords
         }
-        self.speeds = [COORDS.index(f"v_{name}") for name in ("H2O", "CO2", "CO", "H2")]
+        self.speeds = [
+            coords.index(f"v_{name}")
+            for name in ("H2O", "CO2", "CO", "H2")
+            if f"v_{name}" in coords
+        ]
         self.speed_mean, self.speed_sigma = p["parent_velocity"]
         self.speed_floor = float(ndtr(-self.speed_mean / self.speed_sigma))
-        self.jitter = COORDS.index("jitter")
+        self.jitter = coords.index("jitter")
         self.jitter_sigma = p["jitter_sigma"]
 
     def physical(self, latent):
