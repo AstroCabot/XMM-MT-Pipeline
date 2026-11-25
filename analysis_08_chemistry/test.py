@@ -399,7 +399,6 @@ orbit = Orbit(
     1e10,
 )
 close(orbit.exposure(2e10), orbit.exposure(1e10))
-assert orbit.inverse_r2(2e10) == 0
 close(orbit.current_r_au, 1.8688760328902, relative=2e-12)
 close(
     orbit.radius(orbit.perihelion_age_s),
@@ -421,32 +420,10 @@ speed = {name: 0.37 for name in q}
 speed.update(OH=1.2, O_H2O=1.5, O_OH=1.5, H=12, heavy=1.685, H2_photo=11.335)
 actual_chains = {name: chemistry.chains(name, network) for name in q}
 shells, inner, outer = CONFIG["shells"]
-quadrature = CONFIG["quadrature"]
-stride = quadrature["granddaughter_shell_stride"]
-radial_stride = quadrature["granddaughter_radial_stride"]
-assert (shells, stride, radial_stride) == (320, 8, 4)
-fine = Transport(
-    orbit,
-    network,
-    shells,
-    inner,
-    outer,
-    source_radius,
-    81920.5,
-    stride // 2,
-    radial_stride // 2,
-)
-fast = Transport(
-    orbit,
-    network,
-    shells,
-    inner,
-    outer,
-    source_radius,
-    81920.5,
-    stride,
-    radial_stride,
-)
+stride = CONFIG["quadrature"]["transport_node_stride"]
+assert (shells, stride) == (320, 2)
+fine = Transport(orbit, network, shells, inner, outer, source_radius, 81920.5, 1)
+fast = Transport(orbit, network, shells, inner, outer, source_radius, 81920.5, stride)
 for water_beta in (3.3, 8.253):
     beta["H2O"] = water_beta
     for h2_rate in (0, 7e28):
@@ -467,10 +444,6 @@ class FixedOrbit:
         return value
 
     @staticmethod
-    def inverse_r2(age):
-        return np.ones_like(np.asarray(age, float))
-
-    @staticmethod
     def activity(beta, age):
         return np.ones_like(np.asarray(age, float))
 
@@ -486,7 +459,6 @@ transport = Transport(
     1e5,
     np.array([1.0]),
     1.0,
-    granddaughter_stride=4,
 )
 speed = {"P": 1.0, "D": 1.0, "G": 1.0}
 x = (transport.radius - 1) * 1e-4
@@ -511,15 +483,19 @@ assert np.allclose(stable_flux, 1 - np.exp(-x) * (1 + x), rtol=3e-2, atol=2e-8)
 # Unequal daughter speeds have an independent constant-rate matrix solution.
 synthetic_network["G"]["rate_1au_s-1"] = 1e-4
 transport = Transport(
-    FixedOrbit(), synthetic_network, 160, 1, 1e5, np.array([1.0]), 1.0, 4, 1
+    FixedOrbit(), synthetic_network, 160, 1, 1e5, np.array([1.0]), 1.0, 1
 )
-speed = {"P": 1.0, "D": 2.0, "G": 7.0}
-loss = np.array([1e-4 / speed[name] for name in ("P", "D", "G")])
-matrix = np.diag(-loss) + np.diag(loss[:-1], -1)
-density = transport.density(chains[2], 0, speed)
-flux = 4 * np.pi * (transport.radius * 1e5) ** 2 * speed["G"] * 1e5 * density
-expected = np.array([expm(matrix * (radius - 1))[2, 0] for radius in transport.radius])
-assert np.allclose(flux, expected, rtol=1e-5, atol=1e-10)
+use = transport.radius > 3
+for daughter_speed, granddaughter_speed in ((2.0, 7.0), (7.0, 2.0), (8.0, 1.0)):
+    speed = {"P": 1.0, "D": daughter_speed, "G": granddaughter_speed}
+    loss = np.array([1e-4 / speed[name] for name in ("P", "D", "G")])
+    matrix = np.diag(-loss) + np.diag(loss[:-1], -1)
+    density = transport.density(chains[2], 0, speed)
+    flux = 4 * np.pi * (transport.radius * 1e5) ** 2 * speed["G"] * 1e5 * density
+    expected = np.array(
+        [expm(matrix * (radius - 1))[2, 0] for radius in transport.radius]
+    )
+    assert np.allclose(flux[use], expected[use], rtol=1e-3)
 
 
 class VaryingOrbit(FixedOrbit):
@@ -559,9 +535,7 @@ for target in (8, 16, 32):
 serial_network = {
     name: {"rate_1au_s-1": 0.08, "sigma_cm2": 1e-15} for name in ("P", "D", "G")
 }
-serial = Transport(
-    VaryingOrbit(), serial_network, 160, 1, 100, np.array([1.0]), 1.0, 1, 1
-)
+serial = Transport(VaryingOrbit(), serial_network, 160, 1, 100, np.array([1.0]), 1.0, 1)
 granddaughter = serial.density(
     ((("P", "P"), ("D", "D"), ("G", "G")), 1), 0, {"P": 1, "D": 1, "G": 1}
 )

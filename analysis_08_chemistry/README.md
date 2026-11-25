@@ -73,3 +73,10 @@ macros and need `booktabs` and `setspace`.
 `log10_H2_ratio >= -0.5` defines the high mode and `<= -1.5` the low mode.
 `parameters.json` defines the priors; `transport.py` and `inference.py` implement
 the physical model and likelihood.
+
+`transport.py` evaluates daughter and granddaughter fluxes on nodes at every
+second shell edge (`transport_node_stride`) and interpolates them to the 320
+shell centers. The birth integrals use photochemical exposure, the integral of
+`r_h^-2` along a flight, as the variable, so constant-rate daughter profiles are
+exact. Against direct quadrature at 75 parameter points the annular predictions
+agree within 6e-4 (median 3e-5).

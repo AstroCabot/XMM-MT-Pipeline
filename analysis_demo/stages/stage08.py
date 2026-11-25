@@ -28,8 +28,7 @@ DEMO_MODEL = {
     "source_grid_arcmin": [0.01, 30.0, 0.05],
 }
 DEMO_QUADRATURE = {
-    "granddaughter_shell_stride": 8,
-    "granddaughter_radial_stride": 8,
+    "transport_node_stride": 1,
     "psf_azimuth_order": 192,
 }
 

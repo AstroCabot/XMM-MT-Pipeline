@@ -1,13 +1,16 @@
 import math
+from functools import lru_cache
 
 import numpy as np
 from scipy.interpolate import PchipInterpolator
+from scipy.special import exprel
 
 DAY_S = 86400.0
 GAUSS_K = 0.01720209894846
 EV_ERG = 1.602176634e-12
 ARCMIN2_SR = (math.pi / 10800) ** 2
-QUADRATURE_NODES, QUADRATURE_WEIGHTS = np.polynomial.legendre.leggauss(4)
+TINY = np.finfo(float).tiny
+REMNANT_DEPTH = 30.0
 
 
 class Orbit:
@@ -22,11 +25,12 @@ class Orbit:
         nodes = np.geomspace(1e-3, maximum_age_s, 8190)
         self.age = np.unique(np.r_[0.0, nodes, self.perihelion_age_s])
         self.radius_grid = self.radius(self.age)
+        self.current_r_au = float(self.radius(0.0))
+        self.log_radius_grid = np.log(self.radius_grid / self.current_r_au)
         inverse_r2 = self.radius_grid**-2
         self.solar_exposure = np.r_[
             0.0, np.cumsum(0.5 * (inverse_r2[1:] + inverse_r2[:-1]) * np.diff(self.age))
         ]
-        self.current_r_au = float(self.radius(0.0))
 
     def radius(self, age_s):
         age = np.asarray(age_s, float)
@@ -50,19 +54,41 @@ class Orbit:
             raise ValueError("reaction time precedes observation")
         return np.interp(np.minimum(age, self.age[-1]), self.age, self.solar_exposure)
 
-    def inverse_r2(self, age_s):
-        age = np.asarray(age_s, float)
-        value = (
-            np.interp(np.minimum(age, self.age[-1]), self.age, self.radius_grid) ** -2
-        )
-        return np.where(age <= self.age[-1], value, 0)
-
     def activity(self, beta, age_s):
         age = np.asarray(age_s, float)
-        radius = np.interp(
-            np.minimum(age, self.perihelion_age_s), self.age, self.radius_grid
+        return np.exp(
+            -beta
+            * np.interp(
+                np.minimum(age, self.perihelion_age_s), self.age, self.log_radius_grid
+            )
         )
-        return (radius / self.current_r_au) ** (-beta)
+
+
+def intervals(value, log_value, exposure, step):
+    change = log_value[:, step:] - log_value[:, :-step]
+    flat = np.abs(change) < 1e-6
+    mean = np.where(
+        flat,
+        0.5 * (value[:, step:] + value[:, :-step]),
+        (value[:, step:] - value[:, :-step]) / np.where(flat, 1, change),
+    )
+    return (exposure[:, :-step] - exposure[:, step:]) * mean
+
+
+def sequential(old, new, span, exposure, growth, decay):
+    x, y = growth * span, decay * span
+    x = np.where(np.abs(x) < 1e-6, 1e-6, x)
+    shape = (exprel(x + y) - exprel(y)) / np.expm1(x)
+    return np.exp(decay * exposure) * span * (new * exprel(y) + (old - new) * shape)
+
+
+def cumulate(single, paired):
+    total = np.zeros((single.shape[0], single.shape[1] + 1))
+    np.cumsum(single, axis=1, out=total[:, 1:])
+    coarse = total.copy()
+    coarse[:, 2::2] = np.cumsum(paired[:, ::2], axis=1)
+    coarse[:, 3::2] = total[:, 1:2] + np.cumsum(paired[:, 1::2], axis=1)
+    return total + np.clip((total - coarse) / 3, -0.1 * total, 0.1 * total)
 
 
 class Transport:
@@ -75,8 +101,7 @@ class Transport:
         outer_km,
         source_radius_arcmin,
         km_per_arcmin,
-        granddaughter_stride=8,
-        granddaughter_radial_stride=4,
+        node_stride=2,
     ):
         self.orbit, self.network = orbit, network
         self.edges = np.geomspace(inner_km, outer_km, shell_count + 1)
@@ -88,8 +113,96 @@ class Transport:
             np.sqrt(np.maximum(outer**2 - rho**2, 0))
             - np.sqrt(np.maximum(inner**2 - rho**2, 0))
         )
-        self.stride = granddaughter_stride
-        self.radial_stride = granddaughter_radial_stride
+        self.node = self.edges[::node_stride]
+        self.step = math.log(self.node[1] / self.node[0])
+        self.separation = np.maximum(self.node[:, None] - self.node[None, :], 0)
+
+    @lru_cache(maxsize=16)
+    def _flight(self, speed):
+        return self.orbit.exposure(self.separation / speed)
+
+    @lru_cache(maxsize=16)
+    def _release(self, parent_speed, speed, beta):
+        age = self.separation / speed + (self.node - self.node[0]) / parent_speed
+        return np.log(self.orbit.activity(beta, age)), self.orbit.exposure(age)
+
+    @lru_cache(maxsize=4)
+    def _daughter(self, parent_rate, rate, parent_speed, speed, beta):
+        flight = self._flight(speed)
+        log_activity, release = self._release(parent_speed, speed, beta)
+        log_birth = log_activity - parent_rate * (release - flight) - rate * flight
+        birth = np.exp(log_birth)
+        flux = (parent_rate * speed / parent_speed) * cumulate(
+            intervals(birth, log_birth, flight, 1),
+            intervals(birth, log_birth, flight, 2),
+        )
+        log_flux = np.log(np.maximum(flux, TINY)) + rate * flight
+        with np.errstate(divide="ignore", invalid="ignore"):
+            width = np.diff(flight, axis=0)
+            secant = np.diff(log_flux, axis=0) / width
+            lower, upper = secant[:-1], secant[1:]
+            first, second = 2 * width[1:] + width[:-1], width[1:] + 2 * width[:-1]
+            slope = np.empty_like(flux)
+            slope[1:-1] = np.where(
+                lower * upper > 0,
+                (first + second) / (first / lower + second / upper),
+                0,
+            )
+        slope[0], slope[-1] = secant[0], secant[-1]
+        diagonal = np.arange(len(self.node) - 1)
+        slope[diagonal, diagonal] = secant[diagonal, diagonal]
+        return flux, log_flux, np.nan_to_num(slope)
+
+    def _granddaughter(self, daughter, rate, velocity):
+        flux, log_flux, slope = daughter
+        reach, flight = self._flight(velocity[1]), self._flight(velocity[2])
+        offset, last = self.node - self.node[0], len(self.node) - 1
+        column = np.broadcast_to(np.arange(last + 1), flight.shape)
+        arrival = self.node + velocity[1] / velocity[2] * self.separation
+        start = np.floor(np.log(arrival / self.node[0]) / self.step).astype(int)
+        start = np.minimum(np.maximum(start, column), last - 1)
+        width = reach[start + 1, column] - reach[start, column]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            u = np.where(width > 0, (flight - reach[start, column]) / width, 1.0)
+        u = np.clip(u, 0, 1)
+        log_value = (
+            (1 + 2 * u) * (1 - u) ** 2 * log_flux[start, column]
+            + u * (1 - u) ** 2 * width * slope[start, column]
+            + u**2 * (3 - 2 * u) * log_flux[start + 1, column]
+            + u**2 * (u - 1) * width * slope[start + 1, column]
+            - rate[1] * flight
+        )
+        growth, decay = rate[0] - rate[1], rate[1] - rate[2]
+        burst = rate[1] * width * offset > REMNANT_DEPTH * (
+            self.node[start + 1] - self.node[start]
+        )
+        lower, upper = (
+            flux[start[burst], column[burst]],
+            flux[start[burst] + 1, column[burst]],
+        )
+        x = growth * width[burst]
+        x = np.where(np.abs(x) < 1e-6, 1e-6, x)
+        frozen = lower + (upper - lower) * np.expm1(x * u[burst]) / np.expm1(x)
+        log_value[burst] = np.log(np.maximum(frozen, TINY))
+        log_birth = log_value + decay * flight
+        birth = np.exp(log_birth)
+        parts = []
+        for step in (1, 2):
+            part = intervals(birth, log_birth, flight, step)
+            span = flight[:, :-step] - flight[:, step:]
+            burst = rate[1] * velocity[2] * span * offset[:-step] > (
+                REMNANT_DEPTH * velocity[1] * (self.node[step:] - self.node[:-step])
+            )
+            part[burst] = sequential(
+                np.exp(log_value[:, :-step][burst]),
+                np.exp(log_value[:, step:][burst]),
+                span[burst],
+                flight[:, step:][burst],
+                growth,
+                decay,
+            )
+            parts.append(part)
+        return rate[1] * velocity[2] / velocity[1] * np.diagonal(cumulate(*parts))
 
     def density(self, chain, beta, speed):
         segments, weight = chain
@@ -102,105 +215,15 @@ class Transport:
             age = (radius - r0) / velocity[0]
             survival = np.exp(-rate[0] * self.orbit.exposure(age))
             return norm * self.orbit.activity(beta, age) * survival
+        daughter = self._daughter(rate[0], rate[1], velocity[0], velocity[1], beta)
         if len(segments) == 2:
-            lo, hi = self.edges[:-1], self.edges[1:]
-            upper = np.minimum(hi[:, None], radius[None, :])
-            valid = upper > lo[:, None]
-            birth = 0.5 * (lo[:, None] + upper)
-            final_age = np.maximum(radius[None, :] - birth, 0) / velocity[1]
-            emission_age = final_age + (birth - r0) / velocity[0]
-            probability = (
-                (upper - lo[:, None])
-                * rate[0]
-                / velocity[0]
-                * self.orbit.inverse_r2(final_age)
-                * np.exp(
-                    -rate[0]
-                    * (
-                        self.orbit.exposure(emission_age)
-                        - self.orbit.exposure(final_age)
-                    )
-                )
-            )
-            survival = np.exp(-rate[1] * self.orbit.exposure(final_age))
-            terms = np.where(
-                valid,
-                probability * survival * self.orbit.activity(beta, emission_age),
-                0,
-            )
-            return norm * terms.sum(axis=0)
-        return norm * self._granddaughter(rate, velocity, beta)
-
-    def _granddaughter(self, rate, velocity, beta):
-        coarse = self.edges[:: self.stride]
-        if coarse[-1] != self.edges[-1]:
-            coarse = np.r_[coarse, self.edges[-1]]
-        index = np.unique(
-            np.r_[
-                np.arange(0, len(self.radius), self.radial_stride), len(self.radius) - 1
-            ]
-        )
-        values = []
-        for start in range(0, len(index), 8):
-            final_radius = self.radius[index[start : start + 8], None, None]
-            stop = min(np.searchsorted(coarse, final_radius.max()), len(coarse) - 1)
-            lo = np.repeat(coarse[:stop], len(QUADRATURE_NODES))
-            hi = np.repeat(coarse[1 : stop + 1], len(QUADRATURE_NODES))
-            node = np.tile(QUADRATURE_NODES, stop)
-            weight = np.tile(QUADRATURE_WEIGHTS, stop)
-            lo1, hi1 = lo[None, :, None], hi[None, :, None]
-            lo2, hi2 = lo[None, None, :], hi[None, None, :]
-            upper1 = np.maximum(lo1, np.minimum(hi1, final_radius))
-            width1 = upper1 - lo1
-            b1 = 0.5 * (lo1 + upper1 + width1 * node[None, :, None])
-            lower2 = np.maximum(lo2, b1)
-            upper2 = np.maximum(lower2, np.minimum(hi2, final_radius))
-            width2 = upper2 - lower2
-            b2 = 0.5 * (lower2 + upper2 + width2 * node[None, None, :])
-            final_age = np.maximum(final_radius - b2, 0) / velocity[2]
-            middle_age = (b2 - b1) / velocity[1]
-            parent_start = final_age + middle_age
-            emission_age = parent_start + (b1 - self.edges[0]) / velocity[0]
-            parent = (
-                0.5
-                * width1
-                * weight[None, :, None]
-                * rate[0]
-                / velocity[0]
-                * self.orbit.inverse_r2(parent_start)
-                * np.exp(
-                    -rate[0]
-                    * (
-                        self.orbit.exposure(emission_age)
-                        - self.orbit.exposure(parent_start)
-                    )
-                )
-            )
-            daughter = (
-                0.5
-                * width2
-                * weight[None, None, :]
-                * rate[1]
-                / velocity[1]
-                * self.orbit.inverse_r2(final_age)
-                * np.exp(
-                    -rate[1]
-                    * (
-                        self.orbit.exposure(parent_start)
-                        - self.orbit.exposure(final_age)
-                    )
-                )
-            )
-            survival = np.exp(-rate[2] * self.orbit.exposure(final_age))
-            terms = (
-                parent * daughter * survival * self.orbit.activity(beta, emission_age)
-            )
-            values.extend(terms.sum(axis=(1, 2)))
-        return np.exp(
+            flux = np.diagonal(daughter[0])
+        else:
+            flux = self._granddaughter(daughter, rate, velocity)
+        return norm * np.exp(
             PchipInterpolator(
-                np.log(self.radius[index]),
-                np.log(np.maximum(values, np.finfo(float).tiny)),
-            )(np.log(self.radius))
+                np.log(self.node[1:] - r0), np.log(np.maximum(flux[1:], TINY))
+            )(np.log(radius - r0))
         )
 
     def source_profile(

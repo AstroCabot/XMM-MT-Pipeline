@@ -134,8 +134,7 @@ def build_model(inputs, operator):
         outer,
         source,
         inputs["geometry"]["km_per_arcmin"],
-        quadrature["granddaughter_shell_stride"],
-        quadrature["granddaughter_radial_stride"],
+        quadrature["transport_node_stride"],
     )
     chains = {
         name: chemistry.chains(name, network) for name in ("H2O", "CO2", "CO", "H2")
