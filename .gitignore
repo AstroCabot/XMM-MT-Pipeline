@@ -27,4 +27,5 @@ analysis_03_spectrum/outputs/stack/
 analysis_04_morphology/outputs/image.fits
 analysis_08_chemistry/outputs/psf.npz
 analysis_08_chemistry/outputs/**/chain.pkl
+analysis_08_chemistry/outputs/**/chain.npz
 analysis_demo/data/pps/profiles.npz
