@@ -118,7 +118,7 @@ def model_rows(wind, spectrum, background):
         r"Tan et al.\cite{Tan2026}",
     )
     lines += row(
-        r"\(\beta_{\rm H_2O}\), comparison fit",
+        r"\(\beta_{\rm H_2O}\), alternate fit",
         rf"\(\mathcal{{N}}({steep['mean']:.3f},{steep['sigma']:.3f})\)",
         FRINCKE,
     )
@@ -140,12 +140,12 @@ def model_rows(wind, spectrum, background):
         r"\(\Phi_{\rm heavy}\) (cm\(^{-2}\)\,s\(^{-1}\))",
         rf"\(\mathcal{{U}}({science(flux['lower'], 2)},"
         rf"{science(flux['upper'], 2)})\)",
-        r"mapped proton-flux envelope \(\times f\)",
+        "spacecraft measurement",
     )
     lines += row(
         r"\(\Delta E\) (eV)",
         f"{spectrum['mean_photon_energy_eV']:.1f}, fixed",
-        "count-weighted band mean",
+        "mean photon energy",
     )
     lines += row(
         r"ECF\(_{\rm MOS2}\) (erg\,cm\(^{-2}\)\,cts\(^{-1}\))",

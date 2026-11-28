@@ -33,17 +33,15 @@ In a fresh virtual environment:
 About one minute on a normal desktop computer. HEASoft, SAS, and AtomDB
 (full pipeline only) install per their own documentation in one to two hours.
 Task 08 also needs SAS for its initial PSF calculation.
-Task 02 reads PPS products directly and requires neither SAS nor a spectral fit.
-Its saved ECF table supports independent narrow-band profiles and aperture
-luminosities; regenerating that table uses PyXspec with standard responses.
+Task 02 needs neither SAS nor XSPEC unless its ECFs are regenerated.
 
 ## Demo
 
-`analysis_demo/` reruns stages 02–09 from a bundled ~19 MB data subset:
+`analysis_demo/` reruns tasks 02–09 from a bundled ~19 MB data subset:
 
     python analysis_demo/demo.py
 
-About seven minutes on a normal desktop computer; the spectral stage needs
+About seven minutes on a normal desktop computer; task 03 needs
 the HEASoft/PyXspec and AtomDB/ACX2 installations above, the rest only the
 pinned Python packages. Expected output: key statistics in
 `analysis_demo/outputs/results.json` and the figures in
@@ -53,6 +51,9 @@ deviations from the full pipeline.
 ## Instructions for use
 
 Run the numbered tasks in order; later tasks read the earlier `outputs/`.
+Tasks 02, 05, and 07 run from the repository root
+(`python -m analysis_07_scaling.run`); the others run as `python run.py`
+inside their directory. Each task's `test.py` runs the same way.
 For task 01, download the ODF, PPS, and Moving-Target PPS trees for
 ObsID 0963720201 from the XMM-Newton Science Archive and point the paths in
 `analysis_01_reduction/settings.json` at those trees and the local SAS,

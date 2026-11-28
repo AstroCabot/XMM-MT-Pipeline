@@ -25,14 +25,15 @@ RESULT_ROWS = (
 )
 
 
-def table(rows, caption, label, columns, header, wide=False):
+def table(rows, caption, label, columns, header, wide=False, font="small", blue=False):
     environment = "table*" if wide else "table"
     return "\n".join(
         (
             rf"\begin{{{environment}}}[!ht]",
             r"\centering",
+            r"\color{blue}" if blue else "",
             r"\singlespacing",
-            r"\small",
+            rf"\{font}",
             r"\renewcommand{\arraystretch}{0.9}" if wide else "",
             rf"\setlength{{\tabcolsep}}{{{5 if wide else 8}pt}}",
             rf"\caption{{{caption}}}",
@@ -50,26 +51,80 @@ def table(rows, caption, label, columns, header, wide=False):
     )
 
 
-def posterior_rows(path):
+def posterior_rows(path, direct_h2):
     with path.open() as stream:
         values = {
             row["parameter"]: row for row in csv.DictReader(stream, delimiter="\t")
         }
     rows = []
     for name, label in RESULT_ROWS:
+        if name in ("log10_H2_ratio", "beta_H2") and name not in values:
+            continue
+        if not direct_h2 and name in ("Q_H2", "H2_fraction"):
+            rows.append(label + r" & - & - & - & -\\")
+            continue
         if name == "scale":
             rows.append(r"\addlinespace[3pt]")
         cells = []
         for key in ("map", "q16", "median", "q84"):
             value = float(values[name][key])
             number = (
-                prior_table.science(value, 2)
+                (prior_table.science(value, 2) if value else "0")
                 if name.startswith("Q_") or name in ("phi_heavy", "offset")
                 else f"{value:.2f}"
             )
             cells.append(rf"\({number}\)")
         rows.append(" & ".join((label, *cells)) + r"\\")
     return rows
+
+
+def posterior_table(directory, direct_h2):
+    rows = []
+    for history, subdirectory in (("Shallow", ""), ("Steep", "water_frincke")):
+        path = directory / subdirectory
+        result = json.loads((path / "result.json").read_text())
+        evidence = json.loads((path / "evidence.json").read_text())
+        mean, sigma = result["beta_H2O_prior"]
+        if rows:
+            rows.append(r"\midrule")
+        rows.extend(
+            (
+                (
+                    rf"\multicolumn{{5}}{{l}}{{\textbf{{{history} water history}}: "
+                    rf"\(\beta_{{\rm H_2O}}\sim\mathcal N({mean:g},{sigma:g})\)}}\\"
+                ),
+                r"\midrule",
+                *posterior_rows(path / "posterior.tsv", direct_h2),
+                r"\addlinespace[3pt]",
+                r"\multicolumn{5}{@{}l@{}}{\hspace{1.5em}\edit{"
+                r"\(\ln\mathcal L(\hat\theta_{\rm MAP}) = "
+                rf"{result['maximum_a_posteriori']['log_likelihood']:.2f}"
+                r"\qquad \ln Z = "
+                rf"{evidence['log_evidence']:.1f}" + r"\)}}\\",
+            )
+        )
+    caption = (
+        r"Sampled parameter distributions for the full-profile chemical transport model "
+        + (
+            r"with directly released \Htwo\ allowed. "
+            if direct_h2
+            else r"with directly released \Htwo\ fixed at zero. "
+        )
+        + r"Columns give the highest-posterior retained sample (MAP) and the 16th, "
+        + r"50th and 84th percentiles of the retained samples, thinned to 500 steps per walker. "
+        + r"Production rates and $f_{\rm H_2}$ refer to the \xmm\ epoch. "
+        + r"The last row of each block gives the log likelihood at the MAP sample "
+        + r"and the log evidence $\ln Z$ (Methods)."
+    )
+    return table(
+        rows,
+        caption,
+        "tab:results" if direct_h2 else "tab:results-no-h2",
+        "@{}lcccc@{}",
+        "Quantity & MAP & 16th & 50th & 84th",
+        font="footnotesize",
+        blue=True,
+    )
 
 
 def main():
@@ -83,7 +138,6 @@ def main():
         r"Parameter specification for the chemical transport model (Part II). This table contains values which were frozen in the model specification, mainly pertaining to photodestruction and photoionization. Rates are calculated by inputting "
         + rf"$F_{{\rm 10.7P}}={f107p:.1f}$ sfu "
         + r"into the power-law fits of Moore and Mapaye\cite{MooreMapaye2025}.",
-        r"Sampled parameter distribution for the full-profile chemical transport model. The columns give the MAP and central percentiles of the full retained chain. Production rates and $f_{\rm H_2}$ refer to the \xmm\ epoch.",
     )
     tables = (
         table(
@@ -101,16 +155,11 @@ def main():
             "@{}llr@{}",
             "Quantity & Value & Source",
         ),
-        table(
-            posterior_rows(OUTPUT / "posterior.tsv"),
-            captions[2],
-            "tab:results",
-            "@{}lcccc@{}",
-            "Quantity & MAP & 16th & 50th & 84th",
-        ),
     )
     for number, content in enumerate(tables, 3):
         (OUTPUT / f"table{number}.tex").write_text(content)
+    for directory, direct_h2 in ((OUTPUT / "no_direct_h2", False), (OUTPUT, True)):
+        (directory / "table5.tex").write_text(posterior_table(directory, direct_h2))
 
 
 if __name__ == "__main__":

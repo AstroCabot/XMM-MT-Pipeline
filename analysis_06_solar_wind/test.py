@@ -323,7 +323,7 @@ def test_geometry():
     assert abs(ring.sum() - np.pi * (400 - 144)) / (np.pi * 256) < 0.05
 
 
-def test_input_contracts():
+def test_inputs():
     with tempfile.TemporaryDirectory(dir=lightcurve.HERE) as directory:
         reduction = Path(directory)
         frame_dir = reduction / "outputs/03_events"
@@ -404,7 +404,6 @@ def test_event_selection_and_exposure():
             "ra_deg": np.zeros(2),
             "dec_deg": np.zeros(2),
         }
-        # The PATTERN==1 event is rejected: PN below 1.1 keV keeps singles only.
         assert lightcurve.counts(event, eph) == (1, 1)
         assert lightcurve.valid_fits(event)
         assert not lightcurve.valid_fits(directory / "missing.fits")
@@ -440,7 +439,7 @@ def test_event_selection_and_exposure():
         )
 
 
-def test_gti_exposure_cache_and_contract():
+def test_gti_exposure_cache():
     with tempfile.TemporaryDirectory(dir=lightcurve.HERE) as directory:
         directory = Path(directory)
         event = directory / "event.fits"
@@ -566,7 +565,7 @@ def test_gti_exposure_cache_and_contract():
         )
 
 
-def test_disposable_frame_fits():
+def test_frame_fits_removal():
     with tempfile.TemporaryDirectory(dir=lightcurve.HERE) as directory:
         directory = Path(directory)
         work, output = directory / "work", directory / "outputs"
@@ -634,7 +633,6 @@ def test_disposable_frame_fits():
 
 
 if __name__ == "__main__":
-    assert lightcurve.SETTINGS["python_lib"] == "/home/scabot/miniconda3/envs/xmm/lib"
     test_wrap_and_mapping()
     test_segment_smoothing()
     test_f107_proxy()
@@ -644,7 +642,7 @@ if __name__ == "__main__":
     test_ion_fraction_calculation()
     test_lightcurve_equation()
     test_geometry()
-    test_input_contracts()
+    test_inputs()
     test_event_selection_and_exposure()
-    test_gti_exposure_cache_and_contract()
-    test_disposable_frame_fits()
+    test_gti_exposure_cache()
+    test_frame_fits_removal()

@@ -56,7 +56,7 @@ def test_combination():
     assert np.allclose(variance, 3 + 0.3 + 0.6 + 2 * scale**2)
 
 
-def test_stack_contract():
+def test_stack_inputs():
     root = WORK / "stack"
     root.mkdir()
     paths = []
@@ -155,7 +155,7 @@ def test_adaptive_display_plane():
 
 
 def test_surface_brightness():
-    shape = (81, 101)  # non-square: catches a transposed crop
+    shape = (81, 101)
     counts, seconds, pixel_arcsec = 200, 1000.0, 4.0
     per_deg2 = counts / seconds / (pixel_arcsec / 3600) ** 2
     x0, y0 = (smooth.SIZE - shape[1]) // 2, (smooth.SIZE - shape[0]) // 2
@@ -168,7 +168,7 @@ def test_surface_brightness():
     assert field.shape == shape
     interior = field[2:-2, 2:-2]
     assert np.allclose(interior, counts / seconds / (pixel_arcsec / 60) ** 2)
-    assert not np.allclose(interior, per_deg2)  # the 3600 must be applied
+    assert not np.allclose(interior, per_deg2)
 
 
 def test_slice_and_products():
@@ -326,7 +326,6 @@ def test_rotated_mask():
 
 
 def main():
-    assert smooth.SETTINGS["python_lib"] == "/home/scabot/miniconda3/envs/xmm/lib"
     assert smooth.SOFT_BAND == tuple(morphology.PARAMS["soft_band_ev"])
     assert smooth.SOFT_TAG == "-".join(map(str, smooth.SOFT_BAND))
     assert WORK.parent == (morphology.REPRO / "work").resolve()
@@ -335,7 +334,7 @@ def main():
     try:
         WORK.mkdir(parents=True)
         test_combination()
-        test_stack_contract()
+        test_stack_inputs()
         test_mask_and_smoothing()
         test_adaptive_display_plane()
         test_surface_brightness()

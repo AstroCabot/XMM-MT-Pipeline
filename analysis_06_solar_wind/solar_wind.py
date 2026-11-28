@@ -205,7 +205,6 @@ def map_samples(series, monitor, comet):
 
 
 def smooth_segments(mapped, grid):
-    """Smooth each segment over SMOOTH_MINUTES without bridging long gaps."""
     points = SMOOTH_MINUTES // GRID_MINUTES + 1
     half = points // 2
     kernel = np.r_[0.5, np.ones(points - 2), 0.5] / (points - 1)
@@ -237,9 +236,6 @@ def rotation_lag_days(comet, earth, mjd):
 
 
 def f107(tracks):
-    """Penticton 20:00 UT flux adjusted to 1 au and shifted to the comet's solar
-    longitude, with the centred 81-day mean F10.7A and the Moore & Mapaye proxy
-    F10.7P = (F10.7 + F10.7A)/2."""
     path = CACHE / "penticton_f107.tsv"
     if not path.exists():
         wanted = set()

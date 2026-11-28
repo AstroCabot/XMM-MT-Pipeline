@@ -12,88 +12,53 @@
     3.3,
     0.3
   ],
-  "mean_acceptance_fraction": 0.1465031584912579,
+  "mean_acceptance_fraction": 0.14632033685017584,
   "background": {
     "model": "continuous broken-law B",
-    "mean_ct_s_arcmin2": 0.0001331588036007339,
-    "sigma_ct_s_arcmin2": 3.45126157309294e-05
+    "mean_ct_s_arcmin2": 0.00013186946344695356,
+    "sigma_ct_s_arcmin2": 3.525023631639618e-05
   },
   "posterior": {
     "Q_H2O": {
-      "q16": 1.6971051954412533e+28,
-      "median": 2.089069194508249e+28,
-      "q84": 2.5732634749253203e+28
+      "q16": 1.7028533132237337e+28,
+      "median": 2.08931789918301e+28,
+      "q84": 2.5717665232712605e+28
     },
     "Q_CO2": {
-      "q16": 2.9575564219942906e+27,
-      "median": 3.509360958200183e+27,
-      "q84": 4.1612651478563256e+27
+      "q16": 2.9724909509843624e+27,
+      "median": 3.5267836901281663e+27,
+      "q84": 4.180782252893473e+27
     },
     "Q_CO": {
-      "q16": 6.744165685095429e+27,
-      "median": 8.240973696773961e+27,
-      "q84": 1.0074038699109057e+28
+      "q16": 6.753401534046931e+27,
+      "median": 8.281695866838193e+27,
+      "q84": 1.0189320902841102e+28
     },
     "Q_H2": {
-      "q16": 4.909074863212847e+28,
-      "median": 6.486403340088594e+28,
-      "q84": 8.017918650573812e+28
+      "q16": 4.859819245003791e+28,
+      "median": 6.443921973908182e+28,
+      "q84": 7.980992256847438e+28
     },
     "Q_total": {
-      "q16": 8.225052908655559e+28,
-      "median": 9.788872646523043e+28,
-      "q84": 1.1310666391955285e+29
+      "q16": 8.20334958334072e+28,
+      "median": 9.747921922266162e+28,
+      "q84": 1.1291791259236862e+29
     },
     "H2_fraction": {
-      "q16": 0.5808250567910931,
-      "median": 0.6634137921005615,
-      "q84": 0.7231711572326731
+      "q16": 0.5797597902585127,
+      "median": 0.6615935340241281,
+      "q84": 0.7215508106514362
     }
   },
   "maximum_likelihood": {
-    "log_probability": 62.30346250924469,
-    "log_likelihood": 78.12888230506388,
-    "Q_total_s-1": 1.165005681701122e+29,
-    "Q_H2_s-1": 7.28409457123161e+28,
-    "H2_fraction": 0.6252411199055695
+    "log_probability": 55.04473040704124,
+    "log_likelihood": 79.63918504541702,
+    "Q_total_s-1": 7.4384786909705135e+28,
+    "Q_H2_s-1": 1.2612661881630149e+28,
+    "H2_fraction": 0.16955969635216564
   },
-  "maximum_likelihood_high": {
-    "log_probability": 62.30346250924469,
-    "log_likelihood": 78.12888230506388,
-    "Q_total_s-1": 1.165005681701122e+29,
-    "Q_H2_s-1": 7.28409457123161e+28,
-    "H2_fraction": 0.6252411199055695
-  },
-  "maximum_a_posteriori_high": {
-    "log_probability": 76.8667076313144,
-    "log_likelihood": 75.13824627728569,
-    "Q_total_s-1": 1.0685518968328274e+29,
-    "Q_H2_s-1": 7.116152746030421e+28,
-    "H2_fraction": 0.6659622959935402
-  },
-  "maximum_a_posteriori_low": {
-    "log_probability": 67.98408391676985,
-    "log_likelihood": 67.18027083799001,
-    "Q_total_s-1": 3.642758721012649e+28,
-    "Q_H2_s-1": 9.049076992308878e+24,
-    "H2_fraction": 0.0002484127466392649
-  },
-  "sampled_delta_log_likelihood_high_minus_low": 5.98922943851781,
-  "sampled_delta_log_probability_high_minus_low": 8.88262371454455,
-  "tau_one_radius_arcmin": 0.33860235116590687,
+  "tau_one_radius_arcmin": 0.33551261345546285,
   "tau_one_status": "resolved",
-  "jitter_prior_checks": {
-    "sigma_0.05": {
-      "Q_H2_median_s-1": 6.52964473793695e+28,
-      "H2_fraction_median": 0.6648874497658211,
-      "effective_sample_size": 44543.75190646163
-    },
-    "sigma_0.20": {
-      "Q_H2_median_s-1": 6.460390507567638e+28,
-      "H2_fraction_median": 0.6624383178338363,
-      "effective_sample_size": 46891.140321925755
-    }
-  },
   "fixed_input_checks": {
     "fixed_minor_velocity_ranges_km_s": {
       "heavy_daughter": [
@@ -105,11 +70,53 @@
         22.37
       ]
     },
-    "fixed_minor_velocity_maximum_profile_fractional_change": 0.11222434727352437,
+    "fixed_minor_velocity_maximum_profile_fractional_change": 0.11506615069813816,
     "daughter_proxy_cross_section_range_cm2": [
       4.4e-15,
       5.41e-15
     ],
-    "daughter_proxy_maximum_profile_fractional_change": 0.04649973331835173
+    "daughter_proxy_maximum_profile_fractional_change": 0.043744357857144506
+  },
+  "maximum_likelihood_high": {
+    "log_probability": 51.817368002723825,
+    "log_likelihood": 79.26117533542323,
+    "Q_total_s-1": 8.098280210627109e+28,
+    "Q_H2_s-1": 2.673507721479552e+28,
+    "H2_fraction": 0.3301327753479307
+  },
+  "maximum_a_posteriori_high": {
+    "log_probability": 76.75575782243872,
+    "log_likelihood": 74.67313058971666,
+    "Q_total_s-1": 9.7172379020672e+28,
+    "Q_H2_s-1": 6.218938304245391e+28,
+    "H2_fraction": 0.6399903312979919
+  },
+  "maximum_a_posteriori_low": {
+    "log_probability": 68.16251848382888,
+    "log_likelihood": 68.58914919477641,
+    "Q_total_s-1": 4.148973373355251e+28,
+    "Q_H2_s-1": 2.3022618009625886e+25,
+    "H2_fraction": 0.0005548991506544094
+  },
+  "sampled_delta_log_likelihood_high_minus_low": 7.824285962615946,
+  "sampled_delta_log_probability_high_minus_low": 8.593239338609848,
+  "jitter_prior_checks": {
+    "sigma_0.05": {
+      "Q_H2_median_s-1": 6.461460496927885e+28,
+      "H2_fraction_median": 0.6616693904389715,
+      "effective_sample_size": 44891.11300592413
+    },
+    "sigma_0.20": {
+      "Q_H2_median_s-1": 6.426950429805916e+28,
+      "H2_fraction_median": 0.6611612641710594,
+      "effective_sample_size": 46869.2724730334
+    }
+  },
+  "maximum_a_posteriori": {
+    "log_probability": 76.75575782243872,
+    "log_likelihood": 74.67313058971666,
+    "Q_total_s-1": 9.7172379020672e+28,
+    "Q_H2_s-1": 6.218938304245391e+28,
+    "H2_fraction": 0.6399903312979919
   }
 }

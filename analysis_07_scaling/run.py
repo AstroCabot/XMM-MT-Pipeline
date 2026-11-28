@@ -77,7 +77,6 @@ def parent_rates(r_au):
 
 
 def missing(inferred, measured):
-    # A negative production deficit is physically zero.
     value = np.maximum(0.0, inferred - measured)
     return value, value / inferred
 

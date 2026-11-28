@@ -1,0 +1,89 @@
+{
+  "xmm_heliocentric_distance_au": 1.8688760328902005,
+  "xmm_observation_jd_tdb": 2461013.291968092,
+  "orbit": {
+    "perihelion_q_au": 1.356481057231181,
+    "eccentricity": 6.141351449317625,
+    "perihelion_jd_tdb": 2460977.9952628477
+  },
+  "f107p_sfu": 133.78478,
+  "photons_per_captured_ion": 1.0,
+  "beta_H2O_prior": [
+    8.253,
+    0.56
+  ],
+  "mean_acceptance_fraction": 0.10723661183059154,
+  "background": {
+    "model": "continuous broken-law B",
+    "mean_ct_s_arcmin2": 0.00013186946344695356,
+    "sigma_ct_s_arcmin2": 3.525023631639618e-05
+  },
+  "posterior": {
+    "Q_H2O": {
+      "q16": 2.949523396048411e+28,
+      "median": 3.645333328749682e+28,
+      "q84": 4.526227805310191e+28
+    },
+    "Q_CO2": {
+      "q16": 3.014439192680987e+27,
+      "median": 3.5812233913321814e+27,
+      "q84": 4.251510574949631e+27
+    },
+    "Q_CO": {
+      "q16": 7.974794323864749e+27,
+      "median": 1.0021832861585126e+28,
+      "q84": 1.2734627249866951e+28
+    },
+    "Q_H2": {
+      "q16": 0.0,
+      "median": 0.0,
+      "q84": 0.0
+    },
+    "Q_total": {
+      "q16": 4.312448886887326e+28,
+      "median": 5.047350827804277e+28,
+      "q84": 5.973735307578353e+28
+    },
+    "H2_fraction": {
+      "q16": 0.0,
+      "median": 0.0,
+      "q84": 0.0
+    }
+  },
+  "maximum_likelihood": {
+    "log_probability": 62.318979121069916,
+    "log_likelihood": 82.32620565898998,
+    "Q_total_s-1": 6.030745664544576e+28,
+    "Q_H2_s-1": 0.0,
+    "H2_fraction": 0.0
+  },
+  "tau_one_radius_arcmin": 0.20726198143671187,
+  "tau_one_status": "resolved",
+  "fixed_input_checks": {
+    "fixed_minor_velocity_ranges_km_s": {
+      "heavy_daughter": [
+        0.3,
+        3.07
+      ],
+      "photolytic_H2": [
+        0.3,
+        22.37
+      ]
+    },
+    "fixed_minor_velocity_maximum_profile_fractional_change": 0.4851848775373326,
+    "daughter_proxy_cross_section_range_cm2": [
+      4.4e-15,
+      5.41e-15
+    ],
+    "daughter_proxy_maximum_profile_fractional_change": 0.1178570810796551
+  },
+  "direct_h2": false,
+  "sampled_parameter_count": 17,
+  "maximum_a_posteriori": {
+    "log_probability": 66.20196514739622,
+    "log_likelihood": 67.75738714483978,
+    "Q_total_s-1": 5.454399910440849e+28,
+    "Q_H2_s-1": 0.0,
+    "H2_fraction": 0.0
+  }
+}

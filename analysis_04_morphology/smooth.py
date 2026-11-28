@@ -60,7 +60,6 @@ def run(command, work):
 
 
 def write_plane(path, data, template, header, exposure=None):
-    """Write a padded binadapt input with comet-frame WCS."""
     rows, columns = data.shape
     if rows > SIZE or columns > SIZE:
         raise ValueError(f"binadapt input {rows}x{columns} exceeds {SIZE}")
@@ -82,7 +81,6 @@ def write_plane(path, data, template, header, exposure=None):
 
 
 def adaptive(events, qpb, sp, oot, exposure, header, mask=None):
-    """Run binadapt with 50-count kernels on a padded 900-pixel input."""
     work_root = REPRO / "work"
     work_root.mkdir(exist_ok=True)
     template = next(
@@ -148,6 +146,5 @@ def adaptive(events, qpb, sp, oot, exposure, header, mask=None):
 
 
 def surface_brightness(blocked, shape, x0, y0):
-    """Return binadapt output on the input grid in count/s/arcmin2."""
     padded = np.repeat(np.repeat(blocked, BINFACTOR, 0), BINFACTOR, 1)
     return padded[y0 : y0 + shape[0], x0 : x0 + shape[1]] / ARCMIN2_PER_DEG2

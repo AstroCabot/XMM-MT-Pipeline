@@ -34,7 +34,6 @@ def sample_shape(sample, alpha_in, alpha_out, radius_break):
     shape[positive] = broken_shape(radius[positive], alpha_in, alpha_out, radius_break)
     if np.any(~positive):
         half_width = math.sqrt(sample["pixel_area_arcmin2"]) / 2
-        # The singular point has finite pixel-integrated flux for alpha_in < 2.
         integrals = [
             integrated_broken(1, alpha_in, alpha_out, radius_break, half_width / c)
             for c in np.cos(PIXEL_ANGLE)

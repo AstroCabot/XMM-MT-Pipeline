@@ -58,9 +58,9 @@ def summarize():
             "luminosity_200_1000_eV_370_arcsec_erg_s": results["02"]["summed_bands"][
                 "200-1000"
             ]["370_arcsec"]["luminosity_erg_s"],
-            "luminosity_200_350_eV_110000_km_erg_s": results["02"]["bands"][
-                "200-350"
-            ]["apertures"]["110000_km"]["luminosity_erg_s"],
+            "luminosity_200_350_eV_110000_km_erg_s": results["02"]["bands"]["200-350"][
+                "apertures"
+            ]["110000_km"]["luminosity_erg_s"],
         },
         "spectrum_pn_only": {
             "chi2": r3["fit"]["chi2"],

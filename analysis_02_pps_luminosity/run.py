@@ -233,7 +233,6 @@ def main():
         ],
     )
     write_outputs(result, profiles)
-    # Compact sufficient statistics let the demo rerun these fits without the event list.
     packed = {
         f"{lo}_{hi}_{key}": value
         for (lo, hi), sample in samples.items()

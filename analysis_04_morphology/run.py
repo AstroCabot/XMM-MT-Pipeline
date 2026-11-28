@@ -192,7 +192,6 @@ def write_products(arrays, header, profile, conversion, extent):
 
 
 def load_stack():
-    """Load all soft-band comet-frame planes on a shared grid."""
     planes = [
         (d, k) for d in DETECTORS for k in ("events", "qpb", "sp", "exposure")
     ] + [("pn", "oot")]

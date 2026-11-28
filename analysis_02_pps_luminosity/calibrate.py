@@ -1,5 +1,3 @@
-"""One-time ECF calculation from standard responses; no comet spectrum is fitted."""
-
 import hashlib
 import json
 import tarfile
@@ -18,7 +16,6 @@ QE_FILE = "EPN_QUANTUMEF_0018.CCF"
 
 def channel_weights(channels, low, high):
     # PPS PI is integer eV; RMF channel n contains PI=5n,...,5n+4.
-    # Use fractional edge bins for (low, high], not calibrated EBOUNDS energies.
     start = 5 * np.asarray(channels, float)
     return np.clip(
         (np.minimum(start + 5, high + 1) - np.maximum(start, low + 1)) / 5, 0, 1
@@ -26,7 +23,6 @@ def channel_weights(channels, low, high):
 
 
 def fold_singles(photons, cache):
-    """Canned FF/Y9 singles RMF and standard ARF with the CCF pattern fraction."""
     arf = fits.getdata(cache / "pn-thin-5.arf", "SPECRESP")
     with fits.open(cache / QE_FILE) as ccf:
         table = ccf["FRACTION_ENERGY"].data

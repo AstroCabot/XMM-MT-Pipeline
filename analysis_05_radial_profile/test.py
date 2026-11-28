@@ -104,16 +104,17 @@ def test_broken_integral():
 
 
 def test_center_without_core():
-    # Well inside 2 arcsec, neither the intensity nor the aperture flux flattens.
     radius = np.array([0.1, 1.0, 2.0]) / 60
     assert np.allclose(broken_shape(radius, 0.5, 1.1, 0.7), (radius / 0.7) ** -0.5)
     for r in radius:
         flux = integrated_broken(0.02, 0.5, 1.1, 0.7, r)
         assert np.isclose(flux, 2 * math.pi * 0.02 * 0.7**0.5 * r**1.5 / 1.5)
     assert integrated_broken(1, 1.9, 2, 0.7, 0) == 0
-    # The exact square-pixel mean of r^-1 is 2*asinh(1)/half_width.
     half_width = 2 / 60
-    sample = {"radius": np.array([0.0, 0.2]), "pixel_area_arcmin2": (2 * half_width)**2}
+    sample = {
+        "radius": np.array([0.0, 0.2]),
+        "pixel_area_arcmin2": (2 * half_width) ** 2,
+    }
     shape = sample_shape(sample, 1, 1.1, 0.7)
     assert np.isclose(shape[0], 2 * math.asinh(1) * 0.7 / half_width, rtol=1e-12)
     assert np.isclose(shape[1], 0.7 / 0.2)
@@ -185,7 +186,7 @@ def test_exposure_calibration():
         raise AssertionError("stale Task 04 calibration accepted")
 
 
-def test_output_contract():
+def test_final_products():
     assert FINAL_PRODUCTS == (
         "profile.tsv",
         "annuli.tsv",
@@ -204,7 +205,7 @@ def main():
     test_aggregation()
     test_exposure_masking()
     test_exposure_calibration()
-    test_output_contract()
+    test_final_products()
 
 
 if __name__ == "__main__":

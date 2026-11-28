@@ -44,7 +44,6 @@ def test_native_exposure_and_patterns():
 
 
 def test_flux_integral():
-    # A uniform source has rate = surface brightness * solid angle.
     fit = {"theta": np.array([math.log(0.02), 0.0, 0.0, math.log(0.7), -10.0, -2.0])}
     result = luminosities(fit, 1e12)
     for row in result.values():
@@ -57,7 +56,6 @@ def test_flux_integral():
 
 
 def test_response_channels():
-    # PI=201..350 spans channels 40..70, with partial 5-eV edge bins.
     channels = np.arange(101)
     narrow = channel_weights(channels, 200, 350)
     assert np.isclose(narrow[40], 0.8) and np.isclose(narrow[70], 0.2)

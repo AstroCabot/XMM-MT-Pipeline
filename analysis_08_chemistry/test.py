@@ -204,12 +204,8 @@ probe[:, inference.COORDS.index("log10_H2_ratio")] = (0, 0.2, 0.5)
 high, high_best, low_best = products.mode_selection(probe, np.array([1.0, 3.0, 2.0]))
 assert high.all() and high_best == 1 and low_best is None
 probe[:, inference.COORDS.index("log10_H2_ratio")] = -2
-try:
-    products.mode_selection(probe, np.arange(3.0))
-except RuntimeError as error:
-    assert "high-H2" in str(error)
-else:
-    raise AssertionError("missing high-H2 mode accepted")
+high, high_best, low_best = products.mode_selection(probe, np.arange(3.0))
+assert not high.any() and high_best is None and low_best == 2
 
 
 def close(left, right, relative=1e-10, absolute=0):
@@ -227,7 +223,7 @@ task03_path = HERE.parent / "analysis_03_spectrum"
 sys.path.insert(0, str(task03_path))
 try:
     specification = importlib.util.spec_from_file_location(
-        "task03_extract_contract", task03_path / "extract.py"
+        "task03_extract", task03_path / "extract.py"
     )
     task03_extract = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(task03_extract)
@@ -277,7 +273,6 @@ assert len(old_discrepancy) == 22
 assert 26 < np.median(old_discrepancy) < 27
 assert 80 < max(old_discrepancy) < 81
 
-# Frame-exposure reconstruction.
 real_settings = json.loads((run.REDUCTION.parent / "settings.json").read_text())
 real_maps = psf.exposure_maps(
     run.REDUCTION, set(real_settings["expected_frames"]), run.SHARED["soft_band_ev"]
@@ -480,7 +475,6 @@ stable = transport.density(chains[2], 0, speed)
 stable_flux = 4 * np.pi * (transport.radius * 1e5) ** 2 * 1e5 * stable
 assert np.allclose(stable_flux, 1 - np.exp(-x) * (1 + x), rtol=3e-2, atol=2e-8)
 
-# Unequal daughter speeds have an independent constant-rate matrix solution.
 synthetic_network["G"]["rate_1au_s-1"] = 1e-4
 transport = Transport(
     FixedOrbit(), synthetic_network, 160, 1, 1e5, np.array([1.0]), 1.0, 1
@@ -546,7 +540,6 @@ for target in (8, 16, 32):
     index = np.argmin(abs(serial.radius - target))
     close(flux[index], expected[index], relative=4e-4)
 
-# Infinite-lifetime Haser column.
 haser_network = {"P": {"rate_1au_s-1": 0.0, "sigma_cm2": 3e-15}}
 source_radius = np.array([100.0])
 haser = Transport(FixedOrbit(), haser_network, 400, 0.01, 1e8, source_radius, 1.0)
@@ -555,7 +548,6 @@ column = float(density @ haser.chord_cm[:, 0])
 expected_column = 1e28 / (4 * 1e5 * source_radius[0] * 1e5)
 close(column, expected_column, relative=6e-3)
 
-# Thin and saturated charge exchange.
 chains_one = {"P": [((("P", "P"),), 1.0)]}
 thin, tau = haser.source_profile(
     {"P": 1e20}, {"P": 0}, {"P": 1}, chains_one, 1e5, 500, 1
@@ -576,7 +568,6 @@ assert (
 )
 assert tau_one_radius(np.array([1.0, 2.0]), np.array([0.2, 0.1])) == (0.0, "below_grid")
 
-# A radial PSF preserves a constant sky.
 psf_radius = np.arange(0.5, 300, 1.0)
 sigma = 6.0
 density = np.exp(-0.5 * (psf_radius / sigma) ** 2) / (2 * np.pi * sigma**2)
@@ -604,7 +595,6 @@ standard = (
 )
 assert np.max(np.abs(standard / fine - 1)) < 0.003
 
-# Exposure-weighted annulus quadrature against direct image integration.
 shape = (381, 381)
 header = fits.Header(
     {
@@ -837,7 +827,7 @@ with tempfile.TemporaryDirectory(dir=HERE) as folder:
     except RuntimeError:
         pass
     else:
-        raise AssertionError("noncanonical Task 01 event path accepted")
+        raise AssertionError("unexpected Task 01 event path accepted")
     invalid = (
         manifest_rows[:-1],
         [{**manifest_rows[0], "det": "mos2"}, *manifest_rows[1:]],
@@ -1162,7 +1152,6 @@ with tempfile.TemporaryDirectory(dir=HERE) as folder:
         run.OUTPUT, run.diagnostic.draw = saved
 
 
-# Priors, current rates, count conversion, offset, and jitter.
 class StubTransport:
     orbit = type("O", (), {"current_r_au": 1.8})()
     source_radius = np.arange(3.0)
@@ -1260,7 +1249,6 @@ assert len(physical) == len(inference.PHYSICAL_NAMES) == 21
 q = dict(zip(inference.PHYSICAL_NAMES, physical))
 close(q["Q_H2"] / (q["Q_H2O"] + q["Q_CO2"] + q["Q_CO"]), 1.0)
 
-# Conventional model: remove direct H2 and its three sampled parameters.
 conventional_config = json.loads(json.dumps(CONFIG))
 conventional_config["direct_h2"] = False
 conventional = inference.Posterior(
@@ -1367,7 +1355,6 @@ for water_beta in (3.3, 8.253):
     )
     assert np.all(tau0 > reduced_tau)
 
-# Count-space data equation.
 events, qpb, soft_proton, oot, exposure, background = (
     120.0,
     10.0,
@@ -1521,7 +1508,6 @@ with tempfile.TemporaryDirectory(dir=HERE) as folder:
     assert loaded["f107p"] == 175.25 and loaded["geometry"]["km_per_arcmin"] == 81920.5
 
 
-# Posterior and recoil-product serialization.
 class ProductPosterior:
     config = json.loads(json.dumps(CONFIG))
     coords = inference.COORDS
@@ -1555,7 +1541,7 @@ flat_product[:, 0] += sequence * 1e-7
 flat_product[:, 9] = 0.3 + sequence * 1e-6
 ratio_index = inference.COORDS.index("log10_H2_ratio")
 flat_product[:, ratio_index] = 0.1
-flat_product[0, ratio_index] = -2
+flat_product[[0, map_index], ratio_index] = -2
 product_logl = sequence.reshape(shape[:2]).astype(float)
 product_logp = -abs(sequence - map_index).reshape(shape[:2]).astype(float)
 product_inputs = {
@@ -1608,13 +1594,21 @@ with tempfile.TemporaryDirectory(dir=HERE) as folder:
         assert saved["physical_draws"][0, 8] == -2
         assert tuple(saved["best_labels"]) == (
             "overall_ml",
+            "overall_map",
             "high_ml",
             "low_ml",
             "high_map",
             "low_map",
         )
         best_index = np.array(
-            [len(flat_product) - 1, len(flat_product) - 1, 0, map_index, 0]
+            [
+                len(flat_product) - 1,
+                map_index,
+                len(flat_product) - 1,
+                map_index,
+                map_index - 1,
+                map_index,
+            ]
         )
         assert saved["best_coordinates"].dtype == np.float64
         assert np.array_equal(saved["best_coordinates"], flat_product[best_index])
@@ -1627,8 +1621,8 @@ with tempfile.TemporaryDirectory(dir=HERE) as folder:
     saved_result = json.loads((Path(folder) / "result.json").read_text())
     assert "posterior" in saved_result and "high_H2" not in saved_result
     assert saved_result["mean_acceptance_fraction"] == 0.25
-    assert saved_result["sampled_delta_log_likelihood_high_minus_low"] == 10200
-    assert saved_result["sampled_delta_log_probability_high_minus_low"] == 500
+    assert saved_result["sampled_delta_log_likelihood_high_minus_low"] == 9700
+    assert saved_result["sampled_delta_log_probability_high_minus_low"] == -1
     assert saved_result["photons_per_captured_ion"] == 1
     assert set(saved_result["maximum_likelihood_high"]) == {
         "log_probability",
@@ -1637,8 +1631,11 @@ with tempfile.TemporaryDirectory(dir=HERE) as folder:
         "Q_H2_s-1",
         "H2_fraction",
     }
-    assert saved_result["maximum_a_posteriori_high"]["log_probability"] == 0
-    assert saved_result["maximum_a_posteriori_low"]["log_probability"] == -500
+    assert saved_result["maximum_a_posteriori"]["log_probability"] == 0
+    assert saved_result["maximum_a_posteriori"]["H2_fraction"] < 0.01
+    assert saved_result["maximum_a_posteriori_high"]["log_probability"] == -1
+    assert saved_result["maximum_a_posteriori_high"]["H2_fraction"] > 0.5
+    assert saved_result["maximum_a_posteriori_low"]["log_probability"] == 0
     assert corner_arguments["path"].name == "corner.png"
     assert corner_arguments["physical"].shape == (len(flat_product), 21)
     assert corner_arguments["probability"].shape == (len(flat_product),)
@@ -1729,7 +1726,6 @@ assert CONFIG["fixed_velocity_km_s"] == {
 }
 
 
-# Short deterministic ensemble recovery.
 class Toy:
     @staticmethod
     def log_probability(value):
@@ -1796,7 +1792,6 @@ assert abs(np.mean(ratio) + 1.5) < 0.15
 assert abs(np.std(ratio) - 5 / math.sqrt(12)) < 0.1
 assert abs(np.std(chain[:, :, 0]) - 1) < 0.1
 
-# Half-normal prior reweighting favors small jitter when its scale shrinks.
 draws = np.tile(physical, (101, 1))
 jitter_grid = np.linspace(0, 0.3, len(draws))
 draws[:, inference.PHYSICAL_NAMES.index("jitter")] = jitter_grid

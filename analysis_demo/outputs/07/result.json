@@ -25,10 +25,10 @@
   "heavy_ion": {
     "cabot_number_flux_cm-2_s-1": 80174.1526276207,
     "cabot_energy_flux_erg_cm-2_s-1": 7.064923469489796e-05,
-    "task06_prior_midpoint_cm-2_s-1": 81428.27287804334,
+    "task06_prior_midpoint_cm-2_s-1": 81428.27287804335,
     "task06_prior_bounds_cm-2_s-1": [
-      4312.49871640443,
-      158544.04703968225
+      4312.4987164044305,
+      158544.04703968228
     ],
     "task06_contemporaneous": false,
     "task06_energy_eV": 500.98615843311654

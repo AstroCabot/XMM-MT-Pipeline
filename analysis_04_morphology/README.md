@@ -1,6 +1,6 @@
 # Analysis 04: morphology
 
-Inputs are the Analysis 01 soft-band stacks and Analysis 03 detector conversion
+Inputs are the Task 01 soft-band stacks and Task 03 detector conversion
 factors. Run in a sourced SAS environment:
 
 ```bash

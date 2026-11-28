@@ -23,7 +23,6 @@ import spectrum
 
 HERE = Path(__file__).resolve().parent
 
-# Response mixing: 3% in rate and 5% in normalized shape.
 RATE_TOLERANCE = 0.03
 SHAPE_TOLERANCE = 0.05
 
@@ -480,7 +479,7 @@ def test_extraction_stamp(work):
         except RuntimeError as error:
             assert "filenames" in str(error)
         else:
-            raise AssertionError("noncanonical stacked filename accepted")
+            raise AssertionError("unexpected stacked filename accepted")
         row = rows[0]
         changes = {
             "fit_high_keV": row["fit_high_keV"] + 0.01,
@@ -823,7 +822,7 @@ def validate_fit_replay(groups, settings, result):
         tuple(result["fit_band_keV"]),
     )
     if replay["n_free_parameters"] != 9 or replay["dof"] != saved["dof"]:
-        raise AssertionError("nine-parameter fit contract changed")
+        raise AssertionError("nine-parameter fit changed")
     if abs(replay["statistic"] - saved["chi2"]) > 0.1:
         raise AssertionError("saved fit statistic did not replay")
     for name, expected in saved["parameters"].items():
@@ -877,7 +876,7 @@ def test_products():
     validate_fit_replay(groups, settings, result)
 
 
-def test_model_contract():
+def test_model():
     settings = json.loads((HERE / "parameters.json").read_text())["model"]
     groups = [
         {"region": region, "det": detector}
@@ -1069,7 +1068,7 @@ def main():
         test_extraction_stamp(work)
         test_stack(work)
         test_response_arithmetic()
-        test_model_contract()
+        test_model()
         test_profile_failure()
         test_conversion_regions()
 

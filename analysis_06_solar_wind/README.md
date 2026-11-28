@@ -10,6 +10,7 @@ export LD_LIBRARY_PATH=/home/scabot/miniconda3/envs/xmm/lib:${LD_LIBRARY_PATH:-}
 Inputs are the cached solar-wind series and the eight masked PN event and OoT
 files, GTIs, ephemeris, attitude, calibration index, and ODF summary, plus the
 ACE/SWICS and Solar Orbiter/HIS composition CDFs and the Task 03 VACX2 fit.
+Series, tracks, and CDFs missing from `cache/` are downloaded.
 
 Outputs are `mapped_flux.tsv`, `lightcurve.tsv`, `result.json`, and Figure 4 as
 PNG and PDF.

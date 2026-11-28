@@ -149,7 +149,7 @@ def make_master(detector, band, rows):
     pha.write(
         net_path, source_path(rows[0]), master, rate=True, group_counts=source_counts
     )
-    weights = [item.exposure * item.backscal for item in spectra]  # Diffuse counts.
+    weights = [item.exposure * item.backscal for item in spectra]
     rmf, arf = work / "response.rmf", work / "response.arf"
     pha.add_response([row["rmf"] for row in rows], weights, rmf, "addrmf")
     pha.add_response([row["arf"] for row in rows], weights, arf, "addarf")

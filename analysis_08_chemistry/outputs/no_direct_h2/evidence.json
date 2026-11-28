@@ -1,0 +1,21 @@
+{
+  "chain_sha256": "97c34c07592a5fb23378a8c8acb6a8cb919c9d179a9cb64efabcd51e2fe62224",
+  "samples": 48000,
+  "dimensions": 17,
+  "gaussian_mass": 0.5,
+  "seed": 20261127,
+  "draws": 4000,
+  "posterior_fraction_inside": 0.22564583333333332,
+  "effective_draws": 1596.8376953285276,
+  "log_evidence": 56.427239737167774,
+  "checks": [
+    {
+      "gaussian_mass": 0.3,
+      "seed": 20261128,
+      "draws": 4000,
+      "posterior_fraction_inside": 0.1170625,
+      "effective_draws": 1715.225466787969,
+      "log_evidence": 56.403143919294855
+    }
+  ]
+}

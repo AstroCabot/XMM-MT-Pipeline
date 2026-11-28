@@ -4,9 +4,9 @@ This task propagates the four released parents and their neutral photoproducts,
 applies the exposure-weighted EPIC PSF, and fits the ten Task 05 annuli in count
 rate surface brightness from their raw count and exposure sufficient statistics.
 
-Inputs are the Analysis 01 comet-frame products, Analysis 03 response
-calibration, Analysis 04 exposure plane, Analysis 05 annuli and background, and
-Analysis 06 solar inputs. Run under WSL:
+Inputs are the Task 01 comet-frame products, Task 03 response
+calibration, Task 04 exposure plane, Task 05 annuli and background, and
+Task 06 solar inputs. Run under WSL:
 
 ```bash
 export HEADAS=/home/scabot/Programs/heasoft/heasoft-6.36/x86_64-pc-linux-gnu-libc2.39
@@ -55,6 +55,16 @@ These fits share `outputs/psf.npz` and write to `outputs/no_direct_h2/` and
 `outputs/no_direct_h2/water_frincke/`. Use the same flags with `corner`.
 Their profile uses the overall MAP; H2 mode comparisons are omitted.
 
+After both shallow-history fits are available, `python figure.py` regenerates
+the paper's `outputs/figure3.png` and `figure3.pdf` from the saved profiles.
+Panel b compares the H2-allowed and no-direct-H2 MAP fits, with each fit's own
+statistical-plus-jitter errors and standardized residuals. The inset and
+optical-depth marker refer to the H2-allowed fit.
+
+All fits use the overall MAP of the retained samples for reported parameters
+and profiles. High-/low-H2 summaries are additional diagnostics and do not
+select the reported MAP. The percentile summaries retain all saved samples.
+
 `fit` saves `outputs/chain.pkl`, in those unit-normal coordinates, every 500
 steps. `run.py fit --resume` continues it exactly, and `--retained-steps N`
 extends a finished run to N retained steps.
@@ -65,10 +75,34 @@ file when any input changes, because resuming does not check them.
 `outputs/prior_table.tex` from the inputs the fit reads. It needs no fit; rerun
 it after Tasks 03, 05, or 06 change.
 
-`python paper_tables.py` exports complete Extended Data Tables 3--5 to
-`outputs/table3.tex`, `table4.tex`, and `table5.tex`, using the same current
-inputs and `outputs/posterior.tsv`. The tables use the paper's labels and
-macros and need `booktabs` and `setspace`.
+After all four fits, `python evidence.py` writes `evidence.json` beside each
+`chain.npz` (about 12 minutes on one core). In prior-normal coordinates, a
+Gaussian is fitted to the highest-density half of the saved draws and truncated
+to its central 50% probability ellipsoid. The evidence is the importance-sampling
+estimate of the likelihood-prior integral over the ellipsoid, from 4000 draws of
+the truncated Gaussian, divided by the fraction of saved draws inside it. The
+check repeats this for the 30% ellipsoid. H2-allowed outputs also give the
+difference in log evidence from the parents-only fit with the same water
+history. Rerun after changing any fit. `python test_evidence.py` checks known
+Gaussian evidences.
+
+`python columns.py` writes `columns.json` beside each `chain.npz` (under a
+minute): the shares of the line-of-sight neutral column integrated over
+0.75-12 arcmin before the PSF, by number and weighted by cross section, for
+direct H2, H, O, OH, the parent molecules H2O, CO2 and CO, C, and the rest
+(photolytic H2 and O2), at the overall MAP and as 16th/50th/84th percentiles of
+300 retained draws (`--draws`). `python test_columns.py` checks that the shares
+sum to one and match an independent calculation at the MAP.
+
+`python paper_tables.py` exports the parameter tables to `outputs/table3.tex`
+and `table4.tex`, plus two results tables: `outputs/no_direct_h2/table5.tex`
+for the conventional fits and `outputs/table5.tex` for the H2-allowed fits.
+Each results table stacks the shallow and steep water histories vertically,
+reading both fits' `posterior.tsv`, `result.json`, and `evidence.json`.
+Run `evidence.py` before regenerating these tables. The LaTeX labels
+are `tab:results-no-h2` and `tab:results`, respectively; float numbers follow
+their order in the manuscript. The tables use the paper's macros and need
+`booktabs` and `setspace`.
 
 `log10_H2_ratio >= -0.5` defines the high mode and `<= -1.5` the low mode.
 `parameters.json` defines the priors; `transport.py` and `inference.py` implement

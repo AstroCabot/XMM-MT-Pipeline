@@ -23,7 +23,6 @@ HERE = Path(__file__).resolve().parent
 REPRO = HERE.parent.resolve()
 WORK = (REPRO / "work" / "reduction_tests").resolve()
 FLARE_NEGATIVE = (slice(120, 160), slice(220, 260))
-assert common.CFG["python_lib"] == "/home/scabot/miniconda3/envs/xmm/lib"
 
 
 def raises(error, function, *args, **kwargs):
@@ -147,7 +146,7 @@ def write_flare_ccf(path):
                 flare_map = np.full(
                     (780, 780), band_index * 10 + filter_index, dtype=np.float32
                 )
-                flare_map[FLARE_NEGATIVE] *= -1  # Real FLARE maps are signed.
+                flare_map[FLARE_NEGATIVE] *= -1
                 maps.append(flare_map)
     columns = [
         fits.Column(name="INSTRUME", format="5A", array=instruments),
@@ -409,7 +408,6 @@ def test_hard_flare_correction():
     assert np.array_equal(corrected != 0, mask != 0)
     assert header["SPCORR"] == "CCF FLARE B4-B6" and header["SPFILT"] == "ALL"
     assert np.isclose(header["SPB4W"], 1499 / 1999)
-    # Signed template pixels must survive scaling and chip masking.
     kept = signed * (mask != 0)
     assert np.allclose(
         corrected, kept * (target / kept.sum(dtype=np.float64)), rtol=2e-6, atol=1e-9

@@ -3,7 +3,7 @@
 This task extracts the masked 0–370 and 400–600 arcsec spectra for PN, MOS1,
 and MOS2, fits the joint sky plus VACX2 model, and writes Figure 2.
 
-Inputs are the Analysis 01 masked events, ephemeris, GTIs, background products,
+Inputs are the Task 01 masked events, ephemeris, GTIs, background products,
 PN OoT events, and frame responses.
 
 Extract in a sourced SAS/HEASoft environment:
@@ -19,7 +19,7 @@ Fit in a fresh HEASoft-only shell with `ATOMDB` set:
 /home/scabot/miniconda3/envs/xmm/bin/python run.py fit
 ```
 
-The SP spectrum uses the Analysis 01 fitted normalization and supplied zero
+The SP spectrum uses the Task 01 fitted normalization and supplied zero
 `STAT_ERR`.
 `live_solid_angle_arcmin2` is the source-masked geometric sky area before
 detector coverage.

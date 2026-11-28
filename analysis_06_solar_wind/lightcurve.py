@@ -107,7 +107,6 @@ def event_gti(path):
 
 
 def gti_samples(row):
-    """Sample the filtered event GTI at MAP_STEP_S with duration weights."""
     spans, ontime = event_gti(Path(row["event"]))
     if abs(ontime - float(row["ontime"])) > 0.051:
         raise RuntimeError(f'ONTIME changed for {row["frame"]}')
@@ -130,7 +129,6 @@ def event_wcs(header):
 
 
 def sky_wcs(header):
-    """Normalize RADECSYS before constructing the celestial WCS."""
     if "RADECSYS" in header:
         header["RADESYS"] = header["RADECSYS"]
         del header["RADECSYS"]
@@ -275,7 +273,6 @@ def sas(tool, cwd, env, **parameters):
 
 
 def exposure_map(row, env):
-    """Unvignetted exposure seconds including QE, filter, gaps, bad pixels, and source holes."""
     destination, image, temporary = frame_fits(row["frame"])
     remove_frame_fits(row["frame"])
     root = image.parent

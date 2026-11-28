@@ -4,7 +4,7 @@ import sys
 
 import numpy as np
 
-from _common import DATA, OUT, REPRO, read_json, restore_env, stage_dir, write_json
+from _common import DATA, OUT, REPRO, read_json, restore_env, stage_dir
 
 sys.path.insert(0, str(REPRO / "analysis_08_chemistry"))
 

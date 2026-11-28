@@ -1,4 +1,5 @@
 import csv
+import json
 from pathlib import Path
 
 import numpy as np
@@ -50,6 +51,17 @@ def table(path):
     if "species" in rows[0]:
         output["species"] = np.array([row["species"] for row in rows])
     return output
+
+
+def map_scale(directory):
+    with (Path(directory) / "posterior.tsv").open(newline="") as stream:
+        return float(
+            next(
+                row["map"]
+                for row in csv.DictReader(stream, delimiter="\t")
+                if row["parameter"] == "scale"
+            )
+        )
 
 
 def haser(radius, scale):
@@ -107,6 +119,7 @@ def draw(
     broken,
     output,
     ecf,
+    no_h2_path=None,
 ):
     import matplotlib
 
@@ -118,6 +131,13 @@ def draw(
     radial = table(radial_path)
     chemical = table(chemical_path)
     intrinsic = table(intrinsic_path)
+    conventional = None
+    if no_h2_path is not None:
+        no_h2_path = Path(no_h2_path)
+        conventional = table(no_h2_path / "profile.tsv")
+        for name in ("r_lo_arcsec", "r_hi_arcsec", "data_ct_s_arcmin2"):
+            if not np.array_equal(chemical[name], conventional[name]):
+                raise ValueError("MAP comparisons require identical data and annuli")
     spherex = table(HERE / "spherex_profiles.csv")
     conversion = ecf / 1e-13
     radius = radial["r_arcmin"]
@@ -376,10 +396,41 @@ def draw(
         xerr = np.vstack((center - edges[:-1], edges[1:] - center))
         intrinsic_radius = intrinsic["radius_arcmin"]
         intrinsic_flux = scale * intrinsic["energy_flux_erg_cm2_s_arcmin2"] / 1e-13
+        model_colour = "#176D71"
+        comparison_colour = "#B86B20"
+        if conventional is not None:
+            conventional_intrinsic = table(no_h2_path / "intrinsic.tsv")
+            profile.plot(
+                conventional_intrinsic["radius_arcmin"],
+                map_scale(no_h2_path)
+                * conventional_intrinsic["energy_flux_erg_cm2_s_arcmin2"]
+                / 1e-13,
+                color=comparison_colour,
+                lw=1.2,
+                ls="--",
+            )
+            conventional_handle = profile.stairs(
+                conventional["prediction_ct_s_arcmin2"] * conversion,
+                edges,
+                baseline=None,
+                color=comparison_colour,
+                lw=1.5,
+            )
+            profile.errorbar(
+                center,
+                chemical_data,
+                yerr=conventional["total_error_ct_s_arcmin2"] * conversion,
+                fmt="none",
+                ecolor=comparison_colour,
+                elinewidth=0.8,
+                capsize=2.5,
+                capthick=0.8,
+                zorder=4,
+            )
         (intrinsic_handle,) = profile.plot(
             intrinsic_radius,
             intrinsic_flux,
-            color="#7B3F61",
+            color=model_colour if conventional is not None else "#7B3F61",
             lw=1.2,
             ls="--",
             label="Intrinsic MAP solution",
@@ -388,7 +439,7 @@ def draw(
             chemical_model,
             edges,
             baseline=None,
-            color="#176D71",
+            color=model_colour,
             lw=1.5,
             label="PSF-convolved MAP",
         )
@@ -396,7 +447,7 @@ def draw(
             center,
             chemical_data,
             xerr=xerr,
-            yerr=chemical_error,
+            yerr=chemical_error if conventional is None else None,
             fmt="o",
             markersize=3.5,
             markerfacecolor="white",
@@ -408,6 +459,18 @@ def draw(
             label="EPIC SWCX annuli",
             zorder=5,
         )
+        if conventional is not None:
+            profile.errorbar(
+                center,
+                chemical_data,
+                yerr=chemical_error,
+                fmt="none",
+                ecolor=model_colour,
+                elinewidth=0.8,
+                capsize=1.2,
+                capthick=0.8,
+                zorder=4.5,
+            )
         if tau_radius > 0:
             profile.axvline(tau_radius, color=".35", lw=0.8, ls=":")
             profile.text(
@@ -445,16 +508,34 @@ def draw(
         inset.text(
             -10.56,
             10.32,
-            "2D Reconstruction\nof MAP model",
+            "2D Reconstruction\nof "
+            + (r"radiolytic H$_2$ MAP" if conventional is not None else "MAP model"),
             color="white",
             ha="left",
             va="top",
             fontsize=6.5,
         )
-        profile.set(yscale="log", ylim=y_limits, ylabel=label)
+        profile_limits = y_limits
+        if conventional is not None:
+            upper = conversion * np.maximum(
+                conventional["prediction_ct_s_arcmin2"],
+                conventional["data_ct_s_arcmin2"]
+                + conventional["total_error_ct_s_arcmin2"],
+            )
+            profile_limits = (y_limits[0], max(y_limits[1], 1.1 * upper.max()))
+        profile.set(yscale="log", ylim=profile_limits, ylabel=label)
+        handles = [intrinsic_handle, psf_handle, annulus_handle]
+        names = ["Intrinsic MAP solution", "PSF-convolved MAP", "EPIC SWCX annuli"]
+        if conventional is not None:
+            handles = [psf_handle, conventional_handle, annulus_handle]
+            names = [
+                r"Radiolytic H$_2$ incl.",
+                "Detected parents only",
+                "EPIC SWCX annuli",
+            ]
         profile.legend(
-            [intrinsic_handle, psf_handle, annulus_handle],
-            ["Intrinsic MAP solution", "PSF-convolved MAP", "EPIC SWCX annuli"],
+            handles,
+            names,
             loc="upper right",
             frameon=False,
             handlelength=2.2,
@@ -479,6 +560,22 @@ def draw(
         residual.axhline(0, color=".25", lw=0.7)
         residual.axhline(2, color=".55", lw=0.6, ls=":")
         residual.axhline(-2, color=".55", lw=0.6, ls=":")
+        if conventional is not None:
+            residual.errorbar(
+                center,
+                conventional["residual_ct_s_arcmin2"]
+                / conventional["total_error_ct_s_arcmin2"],
+                xerr=xerr,
+                yerr=np.ones_like(center),
+                fmt="s",
+                markersize=3.1,
+                markerfacecolor="white",
+                markeredgecolor=comparison_colour,
+                markeredgewidth=0.8,
+                ecolor=comparison_colour,
+                elinewidth=0.7,
+                capsize=0,
+            )
         residual.errorbar(
             center,
             standardized,
@@ -487,9 +584,9 @@ def draw(
             fmt="o",
             markersize=3.5,
             markerfacecolor="white",
-            markeredgecolor="#303030",
+            markeredgecolor=model_colour if conventional is not None else "#303030",
             markeredgewidth=0.8,
-            ecolor="#303030",
+            ecolor=model_colour if conventional is not None else "#303030",
             elinewidth=0.7,
             capsize=0,
         )
@@ -505,7 +602,7 @@ def draw(
         for text, axis in zip("ab", (comparison, profile)):
             axis.text(
                 0.025,
-                0.94,
+                0.84 if axis is profile and conventional is not None else 0.94,
                 text,
                 transform=axis.transAxes,
                 ha="left",
@@ -526,3 +623,30 @@ def draw(
             Path(output) / "figure3.png", dpi=350, bbox_inches="tight", pad_inches=0.03
         )
         plt.close(fig)
+
+
+if __name__ == "__main__":
+    root = HERE.parent
+    output = HERE / "outputs"
+    radial = root / "analysis_05_radial_profile" / "outputs"
+    profile_result = json.loads((radial / "result.json").read_text())["epic"]
+    chemical_result = json.loads((output / "result.json").read_text())
+    geometry = json.loads(
+        (root / "analysis_04_morphology" / "outputs" / "result.json").read_text()
+    )
+    spectrum = json.loads(
+        (root / "analysis_03_spectrum" / "outputs" / "result.json").read_text()
+    )
+    draw(
+        radial / "profile.tsv",
+        output / "profile.tsv",
+        output / "intrinsic.tsv",
+        background=chemical_result["background"]["mean_ct_s_arcmin2"],
+        tau_radius=chemical_result["tau_one_radius_arcmin"],
+        scale=map_scale(output),
+        km_per_arcmin=geometry["km_per_arcmin"],
+        broken=profile_result["broken"],
+        output=output,
+        ecf=spectrum["mos2_ecf_erg_cm2_per_count"],
+        no_h2_path=output / "no_direct_h2",
+    )

@@ -1,8 +1,8 @@
 # Analysis 05: radial profile
 
 One continuous broken power law plus flat sky fits the reduced 0.35–1.10 keV
-EPIC profile, including all 48 rings from 0 to 12 arcmin. There is no separate
-outer-only fit. The Poisson likelihood uses raw counts, with the QPB,
+EPIC profile, including all 48 rings from 0 to 12 arcmin.
+The Poisson likelihood uses raw counts, with the QPB,
 soft-proton and pn out-of-time components fixed. The fitted parameters are the
 normalization at the break, inner slope, outer slope, break radius and sky.
 The inner power law extends to zero radius, with no flat core or central
@@ -14,12 +14,13 @@ The same fitted comet component supplies aperture luminosities, with the
 Task 03 conversion. Twelve leave-one-sector-out refits of the same broken model
 give the jackknife errors on both slopes. The saved `slope` and
 `sector_standard_error` fields refer to the outer slope. The saved
-`normalization_ct_s_arcmin2` is the outer branch's amplitude at 1 arcmin;
-it is derived from the broken fit, not from another fit. These fields keep the
-downstream thin-coma calculation on the same profile as the aperture integrals.
+`normalization_ct_s_arcmin2` is the outer branch's amplitude at 1 arcmin.
 
 The PPS comparison reads Task 02's saved 0.35–1.1 keV broken-profile fit, which
-jointly profiles its hard-band particle template. No second PPS fit runs here.
+jointly profiles its hard-band particle template.
+
+Inputs are the Task 04 `image.fits` and `result.json`, the Task 03
+`result.json`, and the Task 02 outputs.
 
     python -m analysis_05_radial_profile.run
     python -m analysis_05_radial_profile.test

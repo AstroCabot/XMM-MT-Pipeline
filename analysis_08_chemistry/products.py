@@ -131,13 +131,15 @@ def orbit_output(config=CONFIG):
 def mode_selection(theta, log_likelihood):
     ratio = theta[:, inference.COORDS.index("log10_H2_ratio")]
     high, low = ratio >= -0.5, ratio <= -1.5
-    if not high.any():
-        raise RuntimeError("chain did not sample the required high-H2 mode")
 
     def best(mask):
-        return int(np.flatnonzero(mask)[np.argmax(log_likelihood[mask])])
+        return (
+            int(np.flatnonzero(mask)[np.argmax(log_likelihood[mask])])
+            if mask.any()
+            else None
+        )
 
-    return high, best(high), best(low) if low.any() else None
+    return high, best(high), best(low)
 
 
 def write(inputs, posterior, reactions, chain, logp, logl, acceptance_fraction):
@@ -150,13 +152,17 @@ def write(inputs, posterior, reactions, chain, logp, logl, acceptance_fraction):
     if direct_h2:
         high, high_ml, low_ml = mode_selection(flat, flat_ll)
         low = flat[:, posterior.coords.index("log10_H2_ratio")] <= -1.5
-        high_map = int(np.flatnonzero(high)[np.argmax(flat_lp[high])])
+        high_map = (
+            None
+            if high_ml is None
+            else int(np.flatnonzero(high)[np.argmax(flat_lp[high])])
+        )
         low_map = (
             None
             if low_ml is None
             else int(np.flatnonzero(low)[np.argmax(flat_lp[low])])
         )
-    best_theta = flat[high_map if direct_h2 else overall_map]
+    best_theta = flat[overall_map]
 
     stride = max(1, chain.shape[0] // 500)
     theta = chain[::stride].reshape(-1, chain.shape[-1])
@@ -239,16 +245,18 @@ def write(inputs, posterior, reactions, chain, logp, logl, acceptance_fraction):
         ],
     )
 
-    best = [("overall_ml", overall_ml)]
+    best = [("overall_ml", overall_ml), ("overall_map", overall_map)]
     if direct_h2:
-        best.append(("high_ml", high_ml))
-        if low_ml is not None:
-            best.append(("low_ml", low_ml))
-        best.append(("high_map", high_map))
-        if low_map is not None:
-            best.append(("low_map", low_map))
-    else:
-        best.append(("overall_map", overall_map))
+        best += [
+            (label, index)
+            for label, index in (
+                ("high_ml", high_ml),
+                ("low_ml", low_ml),
+                ("high_map", high_map),
+                ("low_map", low_map),
+            )
+            if index is not None
+        ]
     best_index = np.array([index for _, index in best])
     np.savez_compressed(
         OUTPUT / "chain.npz",
@@ -282,17 +290,28 @@ def write(inputs, posterior, reactions, chain, logp, logl, acceptance_fraction):
         "maximum_likelihood": point_record(
             posterior, flat[overall_ml], flat_lp[overall_ml], flat_ll[overall_ml]
         ),
+        "maximum_a_posteriori": point_record(
+            posterior, best_theta, flat_lp[overall_map], flat_ll[overall_map]
+        ),
         "tau_one_radius_arcmin": radius,
         "tau_one_status": status,
         "fixed_input_checks": sensitivity_checks(posterior, best_theta, model),
     }
     if direct_h2:
         result.update(
-            maximum_likelihood_high=point_record(
-                posterior, flat[high_ml], flat_lp[high_ml], flat_ll[high_ml]
+            maximum_likelihood_high=(
+                None
+                if high_ml is None
+                else point_record(
+                    posterior, flat[high_ml], flat_lp[high_ml], flat_ll[high_ml]
+                )
             ),
-            maximum_a_posteriori_high=point_record(
-                posterior, best_theta, flat_lp[high_map], flat_ll[high_map]
+            maximum_a_posteriori_high=(
+                None
+                if high_map is None
+                else point_record(
+                    posterior, flat[high_map], flat_lp[high_map], flat_ll[high_map]
+                )
             ),
             maximum_a_posteriori_low=(
                 None
@@ -302,10 +321,14 @@ def write(inputs, posterior, reactions, chain, logp, logl, acceptance_fraction):
                 )
             ),
             sampled_delta_log_likelihood_high_minus_low=(
-                None if low_ml is None else float(flat_ll[high_ml] - flat_ll[low_ml])
+                None
+                if high_ml is None or low_ml is None
+                else float(flat_ll[high_ml] - flat_ll[low_ml])
             ),
             sampled_delta_log_probability_high_minus_low=(
-                None if low_map is None else float(flat_lp[high_map] - flat_lp[low_map])
+                None
+                if high_map is None or low_map is None
+                else float(flat_lp[high_map] - flat_lp[low_map])
             ),
             jitter_prior_checks=jitter_checks(physical),
         )
@@ -313,9 +336,6 @@ def write(inputs, posterior, reactions, chain, logp, logl, acceptance_fraction):
         result.update(
             direct_h2=False,
             sampled_parameter_count=len(posterior.coords),
-            maximum_a_posteriori=point_record(
-                posterior, best_theta, flat_lp[overall_map], flat_ll[overall_map]
-            ),
         )
     (OUTPUT / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     scale = map_physical[posterior.physical_names.index("scale")]
